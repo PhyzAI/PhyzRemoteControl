@@ -182,6 +182,23 @@ if enable_MC:
     servo.setTarget(arm_left_channel, arm_left_range[1])
     servo.setTarget(arm_right_channel, arm_right_range[1])
 
+    #FIXME: tweak these while watching the hw
+    servo.setSpeed(head_x_channel, 120)
+    servo.setSpeed(head_y_channel, 60)
+    servo.setSpeed(head_tilt_channel, 30)
+    servo.setSpeed(arm_left_channel, 120)
+    servo.setSpeed(arm_right_channel, 120)
+
+    accel = 10  #FIXME: tweak this
+    servo.setAccel(head_x_channel, accel)
+    servo.setAccel(head_y_channel, accel)
+    servo.setAccel(head_tilt_channel, accel)
+    servo.setAccel(arm_left_channel, accel)
+    servo.setAccel(arm_right_channel, accel)
+
+    
+    
+
 num_people = 11
 people_list = choose_people_locations(num_people)   # FIXME: random number of people???
 print(people_list)
