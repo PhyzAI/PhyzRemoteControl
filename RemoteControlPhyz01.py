@@ -33,8 +33,8 @@ import numpy as np
 
 # Image Definitions
 
-enable_GUI = True
-enable_MC = False   # enable Motor Control
+enable_GUI = False
+enable_MC = True   # enable Motor Control
 
 image_size_x = 800
 image_size_y = 600
