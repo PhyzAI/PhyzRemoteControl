@@ -1,4 +1,4 @@
-# PhyzAI remote control, with sort-of random head positinos and poses
+# PhyzAI remote control, with sort-of random head positions and poses
 # with an on-screen display of position
 #
 # Initial Rev, RKD 2024-08
