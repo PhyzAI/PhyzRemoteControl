@@ -176,32 +176,28 @@ if enable_MC:
     servo.setTarget(arm_left_channel, arm_left_range[1])
     servo.setTarget(arm_right_channel, arm_right_range[1])
 
-num_people = 5
-people_list = choose_people_locations(num_people)   # FIXME: random number of people???
-print(people_list)
+    #FIXME: tweak these while watching the hw
+    speed=120
+    servo.setSpeed(head_x_channel, speed)
+    servo.setSpeed(head_y_channel, speed)
+    servo.setSpeed(head_tilt_channel, speed)
+    servo.setSpeed(arm_left_channel, speed)
+    servo.setSpeed(arm_right_channel, speed)
 
-looking_at_person = False
+    accel = 10 #FIXME: tweak this
+    servo.setAccel(head_x_channel, accel)
+    servo.setAccel(head_y_channel, accel)
+    servo.setAccel(head_tilt_channel, accel)
+    servo.setAccel(arm_left_channel, accel)
+    servo.setAccel(arm_right_channel, accel)
+
+    
+
+
 
 try:
     while True:
         clock.tick(30)  # Frame Rate = 30 fps
-
-        if not looking_at_person: 
-            # Make person 0 most likely
-            if np.random.randint(0,100) < 40:   # look at person 0 40% of the time
-                person_num = 0
-            else:
-                person_num = np.random.randint(0,num_people)
-            person_duration_count = np.random.randint(10,30)  # num of frames to keep looking at this person
-            looking_at_person = True
-            pos_x, pos_y = get_position(people_list[person_num])
-        elif looking_at_person and person_duration_count > 0:
-            person_duration_count -= 1
-        else:
-            looking_at_person = False
-            
-
-
 
         events = pygame.event.get()
         for event in events:
@@ -241,8 +237,8 @@ try:
         #      f"{arm_left_axis:.2f},{arm_right_axis:.2f},")
         
 
-        x_step = 20
-        y_step = 10
+        x_step = 30
+        y_step = 50
         
         deadzone = 0.1
         if enable_MC:
@@ -263,18 +259,18 @@ try:
             if enable_MC: servo.setTarget(head_x_channel, curr_x + x_step)
         
         if (abs(left_stick_y_axis) > deadzone) and left_stick_y_axis < 0:
-            pos_y -= 2
+            pos_y -= 5
             if enable_MC: servo.setTarget(head_y_channel, curr_y - y_step)
         elif (abs(left_stick_y_axis) > deadzone) and left_stick_y_axis > 0:
-            pos_y += 2
+            pos_y += 5
             if enable_MC: servo.setTarget(head_y_channel, curr_y + y_step)
 
         if (abs(right_stick_x_axis) > deadzone) and right_stick_x_axis < 0:
-            head_angle -= 1
-            if enable_MC: servo.setTarget(head_tilt_channel, curr_tilt - 5)
+            head_angle -= 4
+            if enable_MC: servo.setTarget(head_tilt_channel, curr_tilt - 20)
         elif (abs(right_stick_x_axis) > deadzone) and right_stick_x_axis > 0:
-            head_angle += 1
-            if enable_MC: servo.setTarget(head_tilt_channel, curr_tilt + 5)
+            head_angle += 4
+            if enable_MC: servo.setTarget(head_tilt_channel, curr_tilt + 20)
 
 
         curr_left_pos = int((1-arm_left_axis) * (arm_left_range[2] - arm_left_range[0]) + arm_left_range[0])
