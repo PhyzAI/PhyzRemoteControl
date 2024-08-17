@@ -133,10 +133,10 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0):
     angle_scale = (head_tilt_range[2] - head_tilt_range[0])//2
     head_pos = int(head_tilt_range[1] + angle*angle_scale/45)
 
-    arm_left_scale = (arm_left_range[2] - arm_left_range[0])//2
-    arm_right_scale = (arm_right_range[2] - arm_right_range[0])//2
-    arm_left_pos = int(arm_left_range[1] + left_arm*arm_left_scale)
-    arm_right_pos = int(arm_right_range[1] + right_arm*arm_right_scale)
+    arm_left_scale = (arm_left_range[2] - arm_left_range[0])
+    arm_right_scale = (arm_right_range[2] - arm_right_range[0])
+    arm_left_pos = int(arm_left_range[0] + left_arm*arm_left_scale)
+    arm_right_pos = int(arm_right_range[0] + right_arm*arm_right_scale)
 
     if enable_MC:
         servo.setTarget(head_x_channel, x_pos)
