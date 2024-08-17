@@ -33,7 +33,7 @@ import numpy as np
 
 # Image Definitions
 
-enable_GUI = True
+enable_GUI = False
 enable_MC = True   # enable Motor Control
 
 image_size_x = 800
@@ -145,6 +145,8 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0):
         servo.setTarget(arm_left_channel, arm_left_pos)
         servo.setTarget(arm_right_channel, arm_right_pos)
 
+
+        print(arm_right_pos, arm_right_range)
     # else:
     #     print(x_pos, head_x_range, y_pos, head_y_range) #head_pos, arm_left_pos, arm_right_pos)
 
@@ -183,13 +185,14 @@ if enable_MC:
     servo.setTarget(arm_right_channel, arm_right_range[1])
 
     #FIXME: tweak these while watching the hw
-    servo.setSpeed(head_x_channel, 120)
-    servo.setSpeed(head_y_channel, 60)
-    servo.setSpeed(head_tilt_channel, 30)
-    servo.setSpeed(arm_left_channel, 120)
-    servo.setSpeed(arm_right_channel, 120)
+    speed=80
+    servo.setSpeed(head_x_channel, speed)
+    servo.setSpeed(head_y_channel, speed//3)
+    servo.setSpeed(head_tilt_channel, speed//4)
+    servo.setSpeed(arm_left_channel, speed)
+    servo.setSpeed(arm_right_channel, speed)
 
-    accel = 10  #FIXME: tweak this
+    accel = 5  #FIXME: tweak this
     servo.setAccel(head_x_channel, accel)
     servo.setAccel(head_y_channel, accel)
     servo.setAccel(head_tilt_channel, accel)
@@ -212,7 +215,7 @@ try:
 
         if not looking_at_person: 
             # Make person 0 most likely
-            if np.random.randint(0,100) < 40: # don't switch person, just switch pose
+            if np.random.randint(0,100) < 30: # don't switch person, just switch pose
                 print("new Pose")
                 pass
             elif np.random.randint(0,100) < 50:   # look at person 0 40% of the time
@@ -225,14 +228,14 @@ try:
             #print("duration: ", person_duration_count)
             looking_at_person = True
             pos_x, pos_y = get_position(people_list[person_num])
-            head_angle = int(np.random.normal(0, 10))
+            head_angle = int(np.random.normal(0, 25))
             if np.random.randint(0,100) < 3: # hands up
                 arm_left_axis = 1
                 arm_right_axis = 1
                 #person_duration_count = 5
                 print('hands up!!!!')
             else:
-                arm_left_axis = abs((np.random.normal(0.2, 0.2)))
+                arm_left_axis = abs((np.random.normal(0.2, 0.3)))
                 arm_right_axis = abs((np.random.normal(0.2, 0.3)))
             #print(arm_left_axis, arm_right_axis)
         elif looking_at_person and person_duration_count > 0:
