@@ -9,14 +9,14 @@
 
 
 import cv2
-from picamera2 import Picamera2
-import libcamera
+#from picamera2 import Picamera2
+#import libcamera
 #from simple_pid import PID
 import math
 import time
-from RpiMotorLib import RpiMotorLib
-import concurrent.futures
-import Ultrasonic_distance as ud
+#from RpiMotorLib import RpiMotorLib
+#import concurrent.futures
+#import Ultrasonic_distance as ud
 import threading
 import numpy as np
 import tflite_runtime.interpreter as tflite
