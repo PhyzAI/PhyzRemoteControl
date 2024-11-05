@@ -47,6 +47,7 @@ enable_face_detect = True
 #image_size_y = 480
 
 num_people = 2
+FACE_DET_TTL = 15
 
 # Servo Definitions
 
@@ -256,11 +257,14 @@ else:
 looking_at_person = False
 person_num = 0
 
+people_list = []
+time_to_live = 0
+
+
 while True:
     clock.tick(30)  # Frame Rate = 30 fps
     #print("*** Frame ***")
 
-    people_list = []
 
     # Read the frame from the webcam
     ret, frame = cap.read()
@@ -273,10 +277,16 @@ while True:
         boxes = None
 
     # Start with detected faces.  Then add some random people if not enough detected
-    if boxes is None:
+    print("time to live: ", time_to_live)
+    if (boxes is None) and (time_to_live > 0):
         pass
         #people_list = [[0,0]]
+        time_to_live -= 1
+    elif (boxes is None) and (time_to_live <= 0):
+        people_list = []
     else:
+        time_to_live = FACE_DET_TTL  # number of frames to ignore if no people detected
+        people_list = []
         for box, prob in zip(boxes, probs):
             if prob > 0.8:
                 x_pos = ((box[0]+box[2])//2 / image_size_x) * 200 - 100
