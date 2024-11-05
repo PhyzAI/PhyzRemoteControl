@@ -3,11 +3,13 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * Pose changes should happen with a different cadence than changing people
-# * Phyz should track a real persons slight movements
+# X Pose changes should happen with a different cadence than changing people
+# X Phyz should track a real persons slight movements
 # X Add camera
 # X Detect Faces
 # X Move sort-of randomly to detected faces.
+
+
 
 # Libraries to install
 # - pip install pygame
@@ -32,24 +34,27 @@
 
 
 import pygame
-#import zmaestro as maestro
 import cv2 
 import numpy as np
-#import tensorflow as tf
 from facenet_pytorch import MTCNN
 
 
-# Image Definitions
+# Enable different basic operations
 
 enable_GUI = True
 enable_MC = False   # enable Motor Control
 enable_face_detect = True
 
-#image_size_x = 640
-#image_size_y = 480
 
-num_people = 0
-FACE_DET_TTL = 25
+# FIXME: Choose correct com-port and device
+if enable_MC:
+    import zmaestro as maestro
+    servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
+    #servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
+
+
+num_people = 0   # Minimum number of "people" to include in the scene
+FACE_DET_TTL = 25  # Hold-time for face detction interruptions (in ticks)
 
 # Servo Definitions
 
@@ -66,6 +71,9 @@ arm_right_range = (1536*4, 2608*4, 2608*4)
 arm_left_range = (1184*4, 1184*4, 1744*4)
         
 
+
+
+
 ##################
 # Functions
 ##################
@@ -76,18 +84,14 @@ def draw_face_boxes(frame, boxes, probs):
             pass
         else:
             for box, prob in zip(boxes, probs): #, landmarks):
-                # Draw rectangle on frame
-                #print(box)
                 cv2.rectangle(frame,
                                 (int(box[0]), int(box[1])),
                                 (int(box[2]), int(box[3])),
                                 (0, 0, 255),
                                 thickness=2)
-
                 # Show probability
                 cv2.putText(frame, str(
                     round(prob,2)), (int(box[2]), int(box[3])), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
-
         return frame
 
 
@@ -96,7 +100,6 @@ def draw_person_loc(image, pos_x, pos_y, color = (0, 100, 0)):
     axesLength = (20, 40) 
     startAngle = 0
     endAngle = 360
-    #color = (0, 100, 0) 
     thickness = 3
     angle = 0
     cv2.ellipse(image, (pos_x, pos_y), axesLength, 
@@ -108,10 +111,6 @@ def draw_person_loc(image, pos_x, pos_y, color = (0, 100, 0)):
 def draw_pos(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0): 
     """ Draw an image of the current head and arm positions """
 
-    # Getting the height and width of the image 
-    height = image.shape[0] 
-    width = image.shape[1] 
-    
     # Ellipse for the head
     axesLength = (50, 100) 
     startAngle = 0
@@ -122,7 +121,7 @@ def draw_pos(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0):
            angle, startAngle, endAngle, color, thickness)
     
     # Ellipse of left arm
-    left_arm = max(left_arm, 0)
+    #left_arm = max(left_arm, 0)
     axesLength = (10, max(int(50-40*left_arm),0)) 
     startAngle = 0
     endAngle = 360
@@ -132,7 +131,7 @@ def draw_pos(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0):
            0, startAngle, endAngle, color, thickness)
     
     # Ellipse of right arm
-    right_arm = max(right_arm, 0)
+    #right_arm = max(right_arm, 0)
     axesLength = (10, max(int(50-40*right_arm),0)) 
     startAngle = 0
     endAngle = 360
@@ -145,9 +144,8 @@ def draw_pos(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0):
   
 
 def choose_people_locations(num_people = 5):
-    # return a list of people, where each pair shows percentage of total range available
+    """return a list of people, where each pair shows percentage of total range available"""
     people_list = np.random.randint(-90, 90, (num_people,2))
-    #people_list[0] = [0,0]
     return people_list
      
 
@@ -208,13 +206,6 @@ ret, frame = cap.read()
 image_size_x = frame.shape[1]
 image_size_y = frame.shape[0]
 
-
-# FIXME: Choose correct com-port and device
-if enable_MC:
-    servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
-    #servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
-
-
 clock = pygame.time.Clock()
 
 # Set head and arms (in image) to middle
@@ -249,26 +240,20 @@ if enable_MC:
     servo.setAccel(arm_right_channel, accel)
 
 
-
-
-#num_people = 3
 if num_people > 0:
     random_people_list = choose_people_locations(num_people)   # FIXME: random number of people???
 else:
     random_people_list = []
-#print(people_list)
 
 looking_at_person = False
 person_num = 0
 
 people_list = []
-time_to_live = 0
+time_to_live = 0   # Time that detected faces stay in case of nothing new detected
 
 
 while True:
     clock.tick(30)  # Frame Rate = 30 fps
-    #print("*** Frame ***")
-
 
     # Read the frame from the webcam
     ret, frame = cap.read()
@@ -281,7 +266,6 @@ while True:
         boxes = None
 
     # Start with detected faces.  Then add some random people if not enough detected
-    #print("time to live: ", time_to_live)
     if (boxes is None) and (time_to_live > 0):
         pass
         #people_list = [[0,0]]
@@ -316,36 +300,25 @@ while True:
     if not looking_at_person: 
         # Make person 0 most likely
         if np.random.randint(0,100) < 60: # don't switch person, just switch pose
-            #print("new Pose")
             pass
         elif np.random.randint(0,100) < 40:   # look at person 0 40% of the time
             person_num = 0
-        #    print("person = ", person_num)
         else:
             person_num = np.random.randint(0,len(people_list))  # 0, num_people
         person_duration_count = int(np.random.normal(10,10)+5)  # num of frames to keep looking at this person
-        #person_duration_count = 7  # num of frames to keep looking at this person
         looking_at_person = True
-        #pos_x, pos_y = get_position(people_list[person_num])
-        #print("pos_x changed")
         head_angle = int(np.random.normal(0, 20))
         if np.random.randint(0,100) < 3: # hands up
             arm_left_axis = 0
             arm_right_axis = 1
-            #person_duration_count = 5
-            print('hands up!!!!')
         else:
             arm_left_axis = abs((np.random.normal(0.4, 0.3)))
             arm_right_axis = abs((np.random.normal(0.1, 0.3)))
-        #print(arm_left_axis, arm_right_axis)
     elif looking_at_person and person_duration_count > 0:
         person_duration_count -= 1
     else:
         looking_at_person = False
 
-
-    #print("person = ", person_num)
-    #print("duration: ", person_duration_count)
 
     events = pygame.event.get()
     
@@ -353,8 +326,6 @@ while True:
         draw_pos(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
         #print(pos_x, pos_y)
         cv2.imshow('image', frame) 
-    
-    #print("Done")
 
     if enable_MC:
         move_physical_position(people_list[person_num], head_angle, arm_left_axis, arm_right_axis)
