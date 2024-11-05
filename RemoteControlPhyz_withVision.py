@@ -3,9 +3,11 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * Add camera
-# * Detect Faces
-# * Move sort-of randomly to detected faces.
+# * Pose changes should happen with a different cadence than changing people
+# * Phyz should track a real persons slight movements
+# X Add camera
+# X Detect Faces
+# X Move sort-of randomly to detected faces.
 
 # Libraries to install
 # - pip install pygame
@@ -46,8 +48,8 @@ enable_face_detect = True
 #image_size_x = 640
 #image_size_y = 480
 
-num_people = 2
-FACE_DET_TTL = 15
+num_people = 0
+FACE_DET_TTL = 25
 
 # Servo Definitions
 
@@ -121,17 +123,17 @@ def draw_pos(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0):
     
     # Ellipse of left arm
     left_arm = max(left_arm, 0)
-    axesLength = (10, int(50-40*left_arm)) 
+    axesLength = (10, max(int(50-40*left_arm),0)) 
     startAngle = 0
     endAngle = 360
     color = (255, 0, 0) 
-    thickness = 5
+    thickness = 4
     cv2.ellipse(image, (pos_x-70, pos_y+40-int(40*left_arm)), axesLength, 
            0, startAngle, endAngle, color, thickness)
     
     # Ellipse of right arm
     right_arm = max(right_arm, 0)
-    axesLength = (10, int(50-40*right_arm)) 
+    axesLength = (10, max(int(50-40*right_arm),0)) 
     startAngle = 0
     endAngle = 360
     color = (255, 0, 0) 
@@ -144,10 +146,11 @@ def draw_pos(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0):
 
 def choose_people_locations(num_people = 5):
     # return a list of people, where each pair shows percentage of total range available
-    people_list = np.random.randint(-100, 100, (num_people,2))
-    people_list[0] = [0,0]
+    people_list = np.random.randint(-90, 90, (num_people,2))
+    #people_list[0] = [0,0]
     return people_list
      
+
 def get_position(person_loc = [0,0]):
     """ Translate relative person location to point on the screen """
     x_loc = person_loc[0]
@@ -159,6 +162,7 @@ def get_position(person_loc = [0,0]):
     x_pos = int(image_size_x/2 + x_loc*x_scale/100)
     y_pos = int(image_size_y/2 + y_loc*y_scale/100)
     return(x_pos,y_pos)
+
 
 def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0):
     """ Translate relative person location and head/arms to physical position """
@@ -277,7 +281,7 @@ while True:
         boxes = None
 
     # Start with detected faces.  Then add some random people if not enough detected
-    print("time to live: ", time_to_live)
+    #print("time to live: ", time_to_live)
     if (boxes is None) and (time_to_live > 0):
         pass
         #people_list = [[0,0]]
@@ -287,8 +291,9 @@ while True:
     else:
         time_to_live = FACE_DET_TTL  # number of frames to ignore if no people detected
         people_list = []
+        #looking_at_person = False  # immediatly switch???
         for box, prob in zip(boxes, probs):
-            if prob > 0.8:
+            if prob > 0.65:
                 x_pos = ((box[0]+box[2])//2 / image_size_x) * 200 - 100
                 y_pos = ((box[1]+box[3])//2 / image_size_y) * 200 - 100
                 people_list.append((x_pos,y_pos))
@@ -299,28 +304,32 @@ while True:
 
     if len(people_list) == 0:
         people_list = [[0,0]]
+        person_num = 0
 
     for person in people_list:
         this_x, this_y = get_position(person)
         draw_person_loc(frame, this_x, this_y)
 
+
+    pos_x, pos_y = get_position(people_list[person_num])
+
     if not looking_at_person: 
         # Make person 0 most likely
-        if np.random.randint(0,100) < 1: # don't switch person, just switch pose
-            print("new Pose")
+        if np.random.randint(0,100) < 60: # don't switch person, just switch pose
+            #print("new Pose")
             pass
-        #elif np.random.randint(0,100) < 30:   # look at person 0 40% of the time
-        #    person_num = 0
+        elif np.random.randint(0,100) < 40:   # look at person 0 40% of the time
+            person_num = 0
         #    print("person = ", person_num)
         else:
             person_num = np.random.randint(0,len(people_list))  # 0, num_people
-        #person_duration_count = int(np.random.normal(40,12)+5)  # num of frames to keep looking at this person
-        person_duration_count = 7  # num of frames to keep looking at this person
+        person_duration_count = int(np.random.normal(10,10)+5)  # num of frames to keep looking at this person
+        #person_duration_count = 7  # num of frames to keep looking at this person
         looking_at_person = True
-        pos_x, pos_y = get_position(people_list[person_num])
+        #pos_x, pos_y = get_position(people_list[person_num])
         #print("pos_x changed")
-        head_angle = int(np.random.normal(0, 25))
-        if np.random.randint(0,100) < 10: # hands up
+        head_angle = int(np.random.normal(0, 20))
+        if np.random.randint(0,100) < 3: # hands up
             arm_left_axis = 0
             arm_right_axis = 1
             #person_duration_count = 5
