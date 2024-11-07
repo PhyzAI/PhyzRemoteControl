@@ -206,7 +206,7 @@ if enable_face_detect:
     mtcnn = MTCNN()
 
 # Video Capture and display
-cap = cv2.VideoCapture(0, cv2.CAP_IMAGES)
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   # CAP_MSMF, CAP_DSHOW, _FFMPEG, _GSTREAMER
 
 print('opened video')
 ret, frame = cap.read()
