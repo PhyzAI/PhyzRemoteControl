@@ -36,14 +36,16 @@
 import pygame
 import cv2 
 import numpy as np
-from facenet_pytorch import MTCNN
 
 
 # Enable different basic operations
 
 enable_GUI = True
 enable_MC = False   # enable Motor Control
-enable_face_detect = True
+enable_face_detect = False
+
+if enable_face_detect:
+    from facenet_pytorch import MTCNN
 
 
 # FIXME: Choose correct com-port and device
@@ -195,13 +197,18 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0):
 ### MAIN ###
 ############
 
+print("*** Starting ***")
+
 pygame.init()
 
 # Create detector    
-mtcnn = MTCNN()
+if enable_face_detect:
+    mtcnn = MTCNN()
 
 # Video Capture and display
-cap = cv2.VideoCapture(0) 
+cap = cv2.VideoCapture(0, cv2.CAP_IMAGES)
+
+print('opened video')
 ret, frame = cap.read()
 image_size_x = frame.shape[1]
 image_size_y = frame.shape[0]
