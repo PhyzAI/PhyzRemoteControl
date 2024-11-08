@@ -3,6 +3,7 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
+# * Tracked location (red box  of a real face) does not exactly match circle drawn (green) 
 # X Pose changes should happen with a different cadence than changing people
 # X Phyz should track a real persons slight movements
 # X Add camera
@@ -41,7 +42,7 @@ import numpy as np
 # Enable different basic operations
 
 enable_GUI = True
-enable_MC = False   # enable Motor Control
+enable_MC = True  # enable Motor Control
 enable_face_detect = True
 
 if enable_face_detect:
@@ -56,7 +57,7 @@ if enable_MC:
 
 
 num_people = 0   # Minimum number of "people" to include in the scene
-FACE_DET_TTL = 25  # Hold-time for face detction interruptions (in ticks)
+FACE_DET_TTL = 35  # Hold-time for face detction interruptions (in ticks)
 
 # Servo Definitions
 
@@ -66,9 +67,11 @@ head_tilt_channel = 2
 arm_left_channel = 4
 arm_right_channel = 3
 
-head_x_range = (1520*4, 1620*4, 1728*4)  # Get these from real PhyzAI Maestro board
-head_y_range = (735*4, 936*4, 1136*4)
-head_tilt_range = (1400*4, 1450*4, 1500*4) 
+ # Get these from real PhyzAI Maestro board
+head_x_range = (1520*4, 1620*4, 1728*4) # head left/right
+head_y_range = (735*4, 936*4, 1136*4) # head up / down
+#head_tilt_range = (1400*4, 1450*4, 1500*4)   # old.  Not sure why it changed. 
+head_tilt_range = (1237*4, 1337*4, 1437*4) 
 arm_right_range = (1536*4, 2608*4, 2608*4) 
 arm_left_range = (1184*4, 1184*4, 1744*4)
         
@@ -94,6 +97,8 @@ def draw_face_boxes(frame, boxes, probs):
                 # Show probability
                 cv2.putText(frame, str(
                     round(prob,2)), (int(box[2]), int(box[3])), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+                #draw_person_loc(frame,int((box[0]+box[2])//2), int((box[1]+box[3])//2), (100,0,0))
+                #print(box)
         return frame
 
 
@@ -240,7 +245,7 @@ if enable_MC:
     servo.setSpeed(arm_right_channel, speed)
 
     accel = 2  #FIXME: tweak this
-    servo.setAccel(head_x_channel, accel)
+    servo.setAccel(head_x_channel, 3*accel)
     servo.setAccel(head_y_channel, accel)
     servo.setAccel(head_tilt_channel, accel)
     servo.setAccel(arm_left_channel, accel)
@@ -260,10 +265,11 @@ time_to_live = 0   # Time that detected faces stay in case of nothing new detect
 
 
 while True:
-    clock.tick(30)  # Frame Rate = 30 fps
+    clock.tick(20)  # Frame Rate = 30 fps
 
     # Read the frame from the webcam
     ret, frame = cap.read()
+    frame = cv2.flip(frame, 1)
 
     # Detect Faces and draw on frame
     if enable_face_detect:
@@ -306,15 +312,17 @@ while True:
 
     if not looking_at_person: 
         # Make person 0 most likely
-        if np.random.randint(0,100) < 60: # don't switch person, just switch pose
-            pass
-        elif np.random.randint(0,100) < 40:   # look at person 0 40% of the time
+        if np.random.randint(0,100) < 50: # don't switch person, just switch pose
+            looking_at_person = True
+            head_angle = int(np.random.normal(0, 15))
+        elif np.random.randint(0,100) < 15:   # look at person 0 40% of the time
             person_num = 0
-        else:
+        #elif np.random.randint(0,100) < 50:   # Switch person
+        else:   # Switch person
+            #print ("Switching person")
+            looking_at_person = True
             person_num = np.random.randint(0,len(people_list))  # 0, num_people
-        person_duration_count = int(np.random.normal(10,10)+5)  # num of frames to keep looking at this person
-        looking_at_person = True
-        head_angle = int(np.random.normal(0, 20))
+        person_duration_count = int(np.random.normal(5,15)+5)  # num of frames to keep looking at this person
         if np.random.randint(0,100) < 3: # hands up
             arm_left_axis = 0
             arm_right_axis = 1
