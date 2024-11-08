@@ -42,7 +42,7 @@ import numpy as np
 
 enable_GUI = True
 enable_MC = False   # enable Motor Control
-enable_face_detect = False
+enable_face_detect = True
 
 if enable_face_detect:
     from facenet_pytorch import MTCNN
@@ -205,7 +205,7 @@ pygame.init()
 if enable_face_detect:
     mtcnn = MTCNN()
 
-# Video Capture and display
+# Video Capture and display (only 1st 2 backends work on Win11?)
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   # CAP_MSMF, CAP_DSHOW, _FFMPEG, _GSTREAMER
 
 print('opened video')
