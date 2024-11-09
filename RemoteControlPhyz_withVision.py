@@ -4,6 +4,8 @@
 #
 # TODO:
 # * Tracked location (red box  of a real face) does not exactly match circle drawn (green) 
+# * add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
+# * Make 1st camera wider angle of view.  S/W fix?
 # X Pose changes should happen with a different cadence than changing people
 # X Phyz should track a real persons slight movements
 # X Add camera
@@ -212,6 +214,8 @@ if enable_face_detect:
 
 # Video Capture and display (only 1st 2 backends work on Win11?)
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   # CAP_MSMF, CAP_DSHOW, _FFMPEG, _GSTREAMER
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
 print('opened video')
 ret, frame = cap.read()
