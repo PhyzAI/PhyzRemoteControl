@@ -3,9 +3,10 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * Tracked location (red box  of a real face) does not exactly match circle drawn (green) 
+# * Tweak calibration of Phyz head versus image center
 # * add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
 # * Make 1st camera wider angle of view.  S/W fix?
+# X Tracked location (red box  of a real face) does not exactly match circle drawn (green) 
 # X Pose changes should happen with a different cadence than changing people
 # X Phyz should track a real persons slight movements
 # X Add camera
@@ -44,7 +45,7 @@ import numpy as np
 # Enable different basic operations
 
 enable_GUI = True
-enable_MC = True  # enable Motor Control
+enable_MC = False  # enable Motor Control
 enable_face_detect = True
 
 if enable_face_detect:
@@ -160,15 +161,19 @@ def choose_people_locations(num_people = 5):
 
 def get_position(person_loc = [0,0]):
     """ Translate relative person location to point on the screen """
-    x_loc = person_loc[0]
-    y_loc = person_loc[1]
+    x_pos = person_loc[0]
+    y_pos = person_loc[1]
 
-    x_scale = int(0.8*image_size_x / 2)
-    y_scale = image_size_y // 2 // 2  # don't look too much up or down
+    #x_scale = int(0.8*image_size_x / 2)
+    #y_scale = image_size_y // 2 // 2  # don't look too much up or down
 
-    x_pos = int(image_size_x/2 + x_loc*x_scale/100)
-    y_pos = int(image_size_y/2 + y_loc*y_scale/100)
-    return(x_pos,y_pos)
+    #x_pos = int(image_size_x/2 + x_loc*x_scale/100)
+    #y_pos = int(image_size_y/2 + y_loc*y_scale/100)
+
+    x_box_mid = int(image_size_x*(x_pos + 100)/200)
+    y_box_mid = int(image_size_y*(y_pos + 100)/200)
+                
+    return(x_box_mid,y_box_mid)
 
 
 def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0):
@@ -295,9 +300,18 @@ while True:
         #looking_at_person = False  # immediatly switch???
         for box, prob in zip(boxes, probs):
             if prob > 0.65:
-                x_pos = ((box[0]+box[2])//2 / image_size_x) * 200 - 100
-                y_pos = ((box[1]+box[3])//2 / image_size_y) * 200 - 100
+                x_box_mid = int((box[0]+box[2])/2)
+                y_box_mid = int((box[1]+box[3])/2)
+                #frame = cv2.circle(frame, (x_box_mid,y_box_mid), radius=3, color=(0, 0, 255), thickness=3)
+                x_pos = (x_box_mid/image_size_x) * 200 - 100
+                y_pos = (y_box_mid/image_size_y) * 200 - 100
                 people_list.append((x_pos,y_pos))
+
+                #this_x, this_y = get_position(people_list[-1]) #FIXME
+                #print("x,y, this_x, this_y", x_box_mid, y_box_mid, this_x, this_y)
+                #draw_person_loc(frame, this_x, this_y)
+
+
     if len(people_list) < num_people:
         delta = num_people - len(people_list)
         people_list.extend(random_people_list[:delta])
