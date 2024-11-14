@@ -14,7 +14,7 @@ if not os.path.exists(image_path):
 # Open the webcam
 cap = cv2.VideoCapture(0)  # Change 0 if using an external webcam
 
-count = 0
+count = 100
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -34,7 +34,7 @@ while cap.isOpened():
     # Show the frame with detections
     cv2.imshow("Object Detection", frame)
 
-    time.sleep(1.5)
+    time.sleep(2.5)
 
     # Exit on pressing 'q'
     if cv2.waitKey(1) & 0xFF == ord('q'):

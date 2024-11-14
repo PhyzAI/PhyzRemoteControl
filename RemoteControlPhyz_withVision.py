@@ -3,9 +3,10 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
+# * Try single head-mounted camera.  If no face seen, then random look around?
 # * Tweak calibration of Phyz head versus image center
 # * add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
-# * Make 1st camera wider angle of view.  S/W fix?
+# X Make 1st camera wider angle of view.  S/W fix?
 # X Tracked location (red box  of a real face) does not exactly match circle drawn (green) 
 # X Pose changes should happen with a different cadence than changing people
 # X Phyz should track a real persons slight movements
@@ -45,7 +46,7 @@ import numpy as np
 # Enable different basic operations
 
 enable_GUI = True
-enable_MC = False  # enable Motor Control
+enable_MC = True  # enable Motor Control
 enable_face_detect = True
 
 if enable_face_detect:
@@ -325,8 +326,11 @@ while True:
         this_x, this_y = get_position(person)
         draw_person_loc(frame, this_x, this_y)
 
-
-    pos_x, pos_y = get_position(people_list[person_num])
+    try:
+        pos_x, pos_y = get_position(people_list[person_num])
+    except:
+        pos_x = int(image_size_x/2)
+        pos_y = int(image_size_y/2)
 
     if not looking_at_person: 
         # Make person 0 most likely
