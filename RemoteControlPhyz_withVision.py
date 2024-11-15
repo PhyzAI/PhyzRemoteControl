@@ -1,11 +1,14 @@
 # PhyzAI remote control, with face detection
+# Alternate version with head-mounted camera
 #
 # Initial Rev, RKD 2024-08
 #
 # TODO:
+# * Keep track of head location in Phyz_control_space when camera is head-mounted
+# * Add some random head moves, and looking around if no face is detected
 # * Tweak calibration of Phyz head versus image center
 # * add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
-# * Make 1st camera wider angle of view.  S/W fix?
+# X Make 1st camera wider angle of view.  S/W fix?
 # X Tracked location (red box  of a real face) does not exactly match circle drawn (green) 
 # X Pose changes should happen with a different cadence than changing people
 # X Phyz should track a real persons slight movements
@@ -47,6 +50,7 @@ import numpy as np
 enable_GUI = True
 enable_MC = False  # enable Motor Control
 enable_face_detect = True
+enable_head_camera = False
 
 if enable_face_detect:
     from facenet_pytorch import MTCNN
@@ -59,8 +63,8 @@ if enable_MC:
     #servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
 
 
-num_people = 0   # Minimum number of "people" to include in the scene
-FACE_DET_TTL = 35  # Hold-time for face detction interruptions (in ticks)
+num_people = 3   # *Maximum* number of "people" to include in the scene
+FACE_DET_TTL = 25  # Hold-time for face detction interruptions (in ticks)
 
 # Servo Definitions
 
@@ -159,8 +163,8 @@ def choose_people_locations(num_people = 5):
     return people_list
      
 
-def get_position(person_loc = [0,0]):
-    """ Translate relative person location to point on the screen """
+def get_position(person_loc = [0,0], move_scale = 1.0):
+    """ Translate Ideal person location to point on the screen """
     x_pos = person_loc[0]
     y_pos = person_loc[1]
 
@@ -170,22 +174,25 @@ def get_position(person_loc = [0,0]):
     #x_pos = int(image_size_x/2 + x_loc*x_scale/100)
     #y_pos = int(image_size_y/2 + y_loc*y_scale/100)
 
-    x_box_mid = int(image_size_x*(x_pos + 100)/200)
-    y_box_mid = int(image_size_y*(y_pos + 100)/200)
+    x_box_mid = int(move_scale * image_size_x*(x_pos + 100)/200)
+    y_box_mid = int(move_scale * image_size_y*(y_pos + 100)/200)
                 
     return(x_box_mid,y_box_mid)
 
 
-def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0):
-    """ Translate relative person location and head/arms to physical position """
+def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, enable_MC = False, move_scale = 1.0):
+    """
+    Translate Ideal person location and head/arms to physical position.
+    * Ideal is based on a -100 to +100 in x and y dimensions.
+    """
     x_loc = person_loc[0]
     y_loc = person_loc[1]
-    x_scale = int(0.8*(head_x_range[2] - head_x_range[0])/2 )
-    y_scale = (head_y_range[2] - head_y_range[0])//2 // 2  # don't look too much up or down
+    x_scale = int(move_scale*(head_x_range[2] - head_x_range[0])/2 )
+    y_scale = int(move_scale*(head_y_range[2] - head_y_range[0])/2 )
     x_pos = int(head_x_range[1] + x_loc*x_scale/100)
     y_pos = int(head_y_range[1] + y_loc*y_scale/100)
 
-    angle_scale = (head_tilt_range[2] - head_tilt_range[0])//2
+    angle_scale = int((head_tilt_range[2] - head_tilt_range[0])/2)
     head_pos = int(head_tilt_range[1] + angle*angle_scale/45)
 
     arm_left_scale = (arm_left_range[2] - arm_left_range[0])
@@ -261,20 +268,15 @@ if enable_MC:
     servo.setAccel(arm_right_channel, accel)
 
 
-if num_people > 0:
-    random_people_list = choose_people_locations(num_people)   # FIXME: random number of people???
-else:
-    random_people_list = []
-
-looking_at_person = False
 person_num = 0
-
 people_list = []
 time_to_live = 0   # Time that detected faces stay in case of nothing new detected
 
+head_duration_count = 0
+body_duration_count = 0
 
 while True:
-    clock.tick(20)  # Frame Rate = 30 fps
+    clock.tick(30)  # Frame Rate = 30 fps
 
     # Read the frame from the webcam
     ret, frame = cap.read()
@@ -287,18 +289,18 @@ while True:
     else:
         boxes = None
 
-    # Start with detected faces.  Then add some random people if not enough detected
     if (boxes is None) and (time_to_live > 0):
-        pass
+        #pass
         #people_list = [[0,0]]
         time_to_live -= 1
     elif (boxes is None) and (time_to_live <= 0):
         people_list = []
+        person_num = 0
     else:
         time_to_live = FACE_DET_TTL  # number of frames to ignore if no people detected
         people_list = []
-        #looking_at_person = False  # immediatly switch???
-        for box, prob in zip(boxes, probs):
+        person_num = 0
+        for box, prob in zip(boxes, probs): 
             if prob > 0.65:
                 x_box_mid = int((box[0]+box[2])/2)
                 y_box_mid = int((box[1]+box[3])/2)
@@ -307,65 +309,77 @@ while True:
                 y_pos = (y_box_mid/image_size_y) * 200 - 100
                 people_list.append((x_pos,y_pos))
 
-                #this_x, this_y = get_position(people_list[-1]) #FIXME
-                #print("x,y, this_x, this_y", x_box_mid, y_box_mid, this_x, this_y)
-                #draw_person_loc(frame, this_x, this_y)
 
-
-    if len(people_list) < num_people:
-        delta = num_people - len(people_list)
-        people_list.extend(random_people_list[:delta])
-        #print(delta, " people added")
-
-    if len(people_list) == 0:
-        people_list = [[0,0]]
+    if len(people_list) > num_people:
+        people_list = people_list[:num_people]
+    elif len(people_list) == 0:
+        #people_list = [[0,0]]
+        this_x = np.random.randint(-70,70)
+        this_y = np.random.randint(-40,40)
+        people_list = [[this_x, this_y]]
         person_num = 0
+        time_to_live = FACE_DET_TTL
 
     for person in people_list:
         this_x, this_y = get_position(person)
         draw_person_loc(frame, this_x, this_y)
 
-
-    pos_x, pos_y = get_position(people_list[person_num])
-
-    if not looking_at_person: 
+    # Look at one person, or switch
+    if head_duration_count <= 0:
         # Make person 0 most likely
-        if np.random.randint(0,100) < 50: # don't switch person, just switch pose
-            looking_at_person = True
-            head_angle = int(np.random.normal(0, 15))
-        elif np.random.randint(0,100) < 15:   # look at person 0 40% of the time
+        if np.random.randint(0,100) < 40:   # Look at the main person
             person_num = 0
-        #elif np.random.randint(0,100) < 50:   # Switch person
         else:   # Switch person
             #print ("Switching person")
-            looking_at_person = True
             person_num = np.random.randint(0,len(people_list))  # 0, num_people
-        person_duration_count = int(np.random.normal(5,15)+5)  # num of frames to keep looking at this person
+        head_duration_count = int(np.random.normal(1,10)+5)  # num of frames to keep looking at this person
+    else:
+        head_duration_count -= 1
+
+    # Move Head and arms
+    if body_duration_count <= 0:  # Time for a new position
+        head_angle = int(np.random.normal(0, 12))
         if np.random.randint(0,100) < 3: # hands up
             arm_left_axis = 0
             arm_right_axis = 1
         else:
             arm_left_axis = abs((np.random.normal(0.4, 0.3)))
             arm_right_axis = abs((np.random.normal(0.1, 0.3)))
-    elif looking_at_person and person_duration_count > 0:
-        person_duration_count -= 1
+        body_duration_count = int(np.random.normal(1,7))  # num of frames to keep same position
     else:
-        looking_at_person = False
+        body_duration_count -= 1
+        
 
 
-    events = pygame.event.get()
-    
+    if enable_head_camera:
+            move_scale = 0.7
+    else:
+            move_scale = 1.0
+        
+    # FIXME: scale so that new Phyz position is only part of the way to desired.  Prevents overshoot
+    # and (hopefully) precessing around the desired spot.
+    try:
+        this_x, this_y = people_list[person_num]  # FIXME: how does this get out of bounds?????
+    except:
+        this_x, this_y = (0,0)
+        person_num = 0
+    this_x *= move_scale
+    this_y *= move_scale
+    pos_x, pos_y = get_position([this_x, this_y])
     if enable_GUI:
         draw_pos(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
         #print(pos_x, pos_y)
         cv2.imshow('image', frame) 
 
-    if enable_MC:
-        move_physical_position(people_list[person_num], head_angle, arm_left_axis, arm_right_axis)
+    # If camera is on the head, only move "move_scale" of the way to the new destination
+    # Hopefully, this will prevent overshoot and precessing around the correct location 
+    move_physical_position(people_list[person_num], head_angle, arm_left_axis, arm_right_axis, enable_MC, move_scale)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
+    events = pygame.event.get()
+    
 
 # Release the video capture and close the window
 cap.release()
