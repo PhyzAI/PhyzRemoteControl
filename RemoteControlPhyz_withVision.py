@@ -4,13 +4,9 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-<<<<<<< HEAD
-# * Try single head-mounted camera.  If no face seen, then random look around?
-=======
 # * Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
 #       This isn't working properly.  The motion of the head messes up face detection.
 # * Add some random head moves, and looking around if no face is detected
->>>>>>> Camera_on_phyz_head
 # * Tweak calibration of Phyz head versus image center
 # * add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
 # X Make 1st camera wider angle of view.  S/W fix?
@@ -329,18 +325,8 @@ while True:
         this_x, this_y = get_position(person)
         draw_person_loc(frame, this_x, this_y)
 
-<<<<<<< HEAD
-    try:
-        pos_x, pos_y = get_position(people_list[person_num])
-    except:
-        pos_x = int(image_size_x/2)
-        pos_y = int(image_size_y/2)
-
-    if not looking_at_person: 
-=======
     # Look at one person, or switch
     if head_duration_count <= 0:
->>>>>>> Camera_on_phyz_head
         # Make person 0 most likely
         if np.random.randint(0,100) < 40:   # Look at the main person
             person_num = 0
