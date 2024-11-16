@@ -4,7 +4,8 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * Keep track of head location in Phyz_control_space when camera is head-mounted
+# * Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
+#       This isn't working properly.  The motion of the head messes up face detection.
 # * Add some random head moves, and looking around if no face is detected
 # * Tweak calibration of Phyz head versus image center
 # * add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
@@ -352,7 +353,7 @@ while True:
 
 
     if enable_head_camera:
-            move_scale = 0.7
+            move_scale = 0.4
     else:
             move_scale = 1.0
         
