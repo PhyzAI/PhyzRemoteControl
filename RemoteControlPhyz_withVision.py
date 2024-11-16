@@ -51,7 +51,7 @@ import numpy as np
 enable_GUI = True
 enable_MC = True  # enable Motor Control
 enable_face_detect = True
-enable_head_camera = False
+enable_head_camera = False  #FIXME: Doesn't work
 
 if enable_face_detect:
     from facenet_pytorch import MTCNN
@@ -75,7 +75,7 @@ head_tilt_channel = 2
 arm_left_channel = 4
 arm_right_channel = 3
 
- # Get these from real PhyzAI Maestro board
+# Get these from real PhyzAI Maestro board
 head_x_range = (1520*4, 1620*4, 1728*4) # head left/right
 head_y_range = (735*4, 936*4, 1136*4) # head up / down
 #head_tilt_range = (1400*4, 1450*4, 1500*4)   # old.  Not sure why it changed. 
@@ -181,17 +181,27 @@ def get_position(person_loc = [0,0], move_scale = 1.0):
     return(x_box_mid,y_box_mid)
 
 
-def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, enable_MC = False, move_scale = 1.0):
+def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, enable_MC = False,
+                            move_scale = 1.0, move_relative = False):
     """
     Translate Ideal person location and head/arms to physical position.
     * Ideal is based on a -100 to +100 in x and y dimensions.
     """
+    print("pos: ", servo.getPosition(head_x_channel), servo.getPosition(head_y_channel))
+    head_x = servo.getPosition(head_x_channel)  #FIXME: Convert this to Ideal-plane 
+    head_x = 1*head_x / (head_x_range[2] - head_x_range[0]) - 0
+    head_y = servo.getPosition(head_y_channel)
+    head_y = 200*head_y / (head_y_range[2] - head_y_range[0]) - 100
+    #print("head pos (ideal): ", head_x, head_y)
+
     x_loc = person_loc[0]
     y_loc = person_loc[1]
     x_scale = int(move_scale*(head_x_range[2] - head_x_range[0])/2 )
     y_scale = int(move_scale*(head_y_range[2] - head_y_range[0])/2 )
     x_pos = int(head_x_range[1] + x_loc*x_scale/100)
     y_pos = int(head_y_range[1] + y_loc*y_scale/100)
+
+    # FIXME: subtract head_x from x_pos (or something like that) to make motion relative
 
     angle_scale = int((head_tilt_range[2] - head_tilt_range[0])/2)
     head_pos = int(head_tilt_range[1] + angle*angle_scale/45)
@@ -279,12 +289,16 @@ body_duration_count = 0
 while True:
     clock.tick(30)  # Frame Rate = 30 fps
 
+    head_is_moving = (servo.isMoving(head_x_channel) | servo.isMoving(head_y_channel) |
+          servo.isMoving(head_tilt_channel) )
+
+
     # Read the frame from the webcam
     ret, frame = cap.read()
     frame = cv2.flip(frame, 1)
 
     # Detect Faces and draw on frame
-    if enable_face_detect:
+    if enable_face_detect and not head_is_moving:
         boxes, probs = mtcnn.detect(frame, landmarks=False)
         draw_face_boxes(frame, boxes, probs) #, landmarks)
     else:
@@ -302,7 +316,7 @@ while True:
         people_list = []
         person_num = 0
         for box, prob in zip(boxes, probs): 
-            if prob > 0.65:
+            if prob > 0.90:
                 x_box_mid = int((box[0]+box[2])/2)
                 y_box_mid = int((box[1]+box[3])/2)
                 #frame = cv2.circle(frame, (x_box_mid,y_box_mid), radius=3, color=(0, 0, 255), thickness=3)
@@ -315,11 +329,12 @@ while True:
         people_list = people_list[:num_people]
     elif len(people_list) == 0:
         #people_list = [[0,0]]
-        this_x = np.random.randint(-70,70)
-        this_y = np.random.randint(-40,40)
+        this_x = int(np.random.normal(0, 20)) # np.random.randint(-30,30)
+        this_y = int(np.random.normal(0, 10)) #np.random.randint(-25,25)
         people_list = [[this_x, this_y]]
         person_num = 0
         time_to_live = FACE_DET_TTL
+        #print("random person: ", this_x, this_y)
 
     for person in people_list:
         this_x, this_y = get_position(person)
@@ -378,6 +393,10 @@ while True:
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+
+
+    
+    # print("Moving: ", head_is_moving )
 
     events = pygame.event.get()
     
