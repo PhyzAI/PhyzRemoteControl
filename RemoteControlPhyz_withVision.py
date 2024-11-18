@@ -4,6 +4,8 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
+# * add calibration offset to head
+# * Only look for heads when not moving??
 # * Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
 #       This isn't working properly.  The motion of the head messes up face detection.
 # * Add some random head moves, and looking around if no face is detected
@@ -49,7 +51,7 @@ import numpy as np
 # Enable different basic operations
 
 enable_GUI = True
-enable_MC = True  # enable Motor Control
+enable_MC = False  # enable Motor Control
 enable_face_detect = True
 enable_head_camera = False  #FIXME: Doesn't work
 
@@ -57,11 +59,15 @@ if enable_face_detect:
     from facenet_pytorch import MTCNN
 
 
+# Calibration to get the head to face you exactly (hopefully)
+HEAD_OFFSET_X = 0
+HEAD_OFFSET_Y = 0
+
 # FIXME: Choose correct com-port and device
 if enable_MC:
     import zmaestro as maestro
-    servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
-    #servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
+    #servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
+    servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
 
 
 num_people = 3   # *Maximum* number of "people" to include in the scene
@@ -187,21 +193,31 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, e
     Translate Ideal person location and head/arms to physical position.
     * Ideal is based on a -100 to +100 in x and y dimensions.
     """
-    print("pos: ", servo.getPosition(head_x_channel), servo.getPosition(head_y_channel))
-    head_x = servo.getPosition(head_x_channel)  #FIXME: Convert this to Ideal-plane 
-    head_x = 1*head_x / (head_x_range[2] - head_x_range[0]) - 0
-    head_y = servo.getPosition(head_y_channel)
-    head_y = 200*head_y / (head_y_range[2] - head_y_range[0]) - 100
-    #print("head pos (ideal): ", head_x, head_y)
 
-    x_loc = person_loc[0]
-    y_loc = person_loc[1]
+    # Get actual camera (head) position
+    #print("pos: ", servo.getPosition(head_x_channel), servo.getPosition(head_y_channel))
+    if enable_MC:
+        head_x = servo.getPosition(head_x_channel)  #FIXME: Convert this to Ideal-plane 
+        head_x = (head_x - (head_x_range[0])) / (head_x_range[2]-head_x_range[0])
+        head_x = head_x * 200 - 100
+        head_y = servo.getPosition(head_y_channel)
+        head_y = (head_y - (head_y_range[0])) / (head_y_range[2]-head_y_range[0])
+        head_y = head_y * 200 - 100
+        #print("head pos (ideal): ", head_x, head_y)
+    else:
+        head_x = 0
+        head_y = 0
+
+    if move_relative:
+        x_loc = person_loc[0] - head_x
+        y_loc = person_loc[1] - head_y
+    else:
+        x_loc = person_loc[0] - HEAD_OFFSET_X
+        y_loc = person_loc[1] - HEAD_OFFSET_Y
     x_scale = int(move_scale*(head_x_range[2] - head_x_range[0])/2 )
     y_scale = int(move_scale*(head_y_range[2] - head_y_range[0])/2 )
-    x_pos = int(head_x_range[1] + x_loc*x_scale/100)
+    x_pos = int(head_x_range[1] + x_loc*x_scale/100)   # FIXME: should head_x_range[1] be the subtraction 2 lines up???
     y_pos = int(head_y_range[1] + y_loc*y_scale/100)
-
-    # FIXME: subtract head_x from x_pos (or something like that) to make motion relative
 
     angle_scale = int((head_tilt_range[2] - head_tilt_range[0])/2)
     head_pos = int(head_tilt_range[1] + angle*angle_scale/45)
@@ -211,6 +227,7 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, e
     arm_left_pos = int(arm_left_range[0] + left_arm*arm_left_scale)
     arm_right_pos = int(arm_right_range[0] + right_arm*arm_right_scale)
 
+    print("x_pos, y_pos: ", x_pos, y_pos)
     if enable_MC:
         servo.setTarget(head_x_channel, x_pos)
         servo.setTarget(head_y_channel, y_pos)
@@ -289,8 +306,11 @@ body_duration_count = 0
 while True:
     clock.tick(30)  # Frame Rate = 30 fps
 
-    head_is_moving = (servo.isMoving(head_x_channel) | servo.isMoving(head_y_channel) |
-          servo.isMoving(head_tilt_channel) )
+    if enable_MC:
+        head_is_moving = (servo.isMoving(head_x_channel) | servo.isMoving(head_y_channel) |
+              servo.isMoving(head_tilt_channel) )
+    else:
+        head_is_moving = False
 
 
     # Read the frame from the webcam
@@ -298,7 +318,7 @@ while True:
     frame = cv2.flip(frame, 1)
 
     # Detect Faces and draw on frame
-    if enable_face_detect and not head_is_moving:
+    if enable_face_detect: # and not head_is_moving:
         boxes, probs = mtcnn.detect(frame, landmarks=False)
         draw_face_boxes(frame, boxes, probs) #, landmarks)
     else:
@@ -352,6 +372,7 @@ while True:
     else:
         head_duration_count -= 1
 
+    #print("person pos: ", people_list[person_num])
     # Move Head and arms
     if body_duration_count <= 0:  # Time for a new position
         head_angle = int(np.random.normal(0, 12))
@@ -368,7 +389,7 @@ while True:
 
 
     if enable_head_camera:
-            move_scale = 0.4
+            move_scale = 1.0 # 0.7
     else:
             move_scale = 1.0
         
@@ -389,7 +410,7 @@ while True:
 
     # If camera is on the head, only move "move_scale" of the way to the new destination
     # Hopefully, this will prevent overshoot and precessing around the correct location 
-    move_physical_position(people_list[person_num], head_angle, arm_left_axis, arm_right_axis, enable_MC, move_scale)
+    move_physical_position(people_list[person_num], head_angle, arm_left_axis, arm_right_axis, enable_MC, move_scale, enable_head_camera)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
