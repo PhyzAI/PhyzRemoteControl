@@ -4,7 +4,7 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * add calibration offset to head
+# * add calibration offset to head  -- Check this works!
 # * Only look for heads when not moving??
 # * Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
 #       This isn't working properly.  The motion of the head messes up face detection.
@@ -53,7 +53,7 @@ import numpy as np
 enable_GUI = True
 enable_MC = False  # enable Motor Control
 enable_face_detect = True
-enable_head_camera = False  #FIXME: Doesn't work
+enable_head_camera = False  #FIXME: Doesn't work properly
 
 if enable_face_detect:
     from facenet_pytorch import MTCNN
@@ -227,7 +227,7 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, e
     arm_left_pos = int(arm_left_range[0] + left_arm*arm_left_scale)
     arm_right_pos = int(arm_right_range[0] + right_arm*arm_right_scale)
 
-    print("x_pos, y_pos: ", x_pos, y_pos)
+    #print("x_pos, y_pos: ", x_pos, y_pos)
     if enable_MC:
         servo.setTarget(head_x_channel, x_pos)
         servo.setTarget(head_y_channel, y_pos)
