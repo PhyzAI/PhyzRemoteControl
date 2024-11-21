@@ -51,7 +51,7 @@ import numpy as np
 # Enable different basic operations
 
 enable_GUI = True
-enable_MC = False  # enable Motor Control
+enable_MC = True  # enable Motor Control
 enable_face_detect = True
 enable_head_camera = False  #FIXME: Doesn't work properly
 
@@ -60,14 +60,14 @@ if enable_face_detect:
 
 
 # Calibration to get the head to face you exactly (hopefully)
-HEAD_OFFSET_X = 0
+HEAD_OFFSET_X = 16
 HEAD_OFFSET_Y = 0
 
 # FIXME: Choose correct com-port and device
 if enable_MC:
     import zmaestro as maestro
-    #servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
-    servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
+    servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
+    #servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
 
 
 num_people = 3   # *Maximum* number of "people" to include in the scene
@@ -289,8 +289,8 @@ if enable_MC:
     servo.setSpeed(arm_right_channel, speed)
 
     accel = 2  #FIXME: tweak this
-    servo.setAccel(head_x_channel, 3*accel)
-    servo.setAccel(head_y_channel, accel)
+    servo.setAccel(head_x_channel, 5*accel)
+    servo.setAccel(head_y_channel, 2*accel)
     servo.setAccel(head_tilt_channel, accel)
     servo.setAccel(arm_left_channel, accel)
     servo.setAccel(arm_right_channel, accel)
@@ -302,6 +302,9 @@ time_to_live = 0   # Time that detected faces stay in case of nothing new detect
 
 head_duration_count = 0
 body_duration_count = 0
+
+person_offset_x = 0
+person_offset_y = 0
 
 while True:
     clock.tick(30)  # Frame Rate = 30 fps
@@ -363,26 +366,36 @@ while True:
     # Look at one person, or switch
     if head_duration_count <= 0:
         # Make person 0 most likely
-        if np.random.randint(0,100) < 40:   # Look at the main person
+        if np.random.randint(0,100) < 20:   # Look at the main person
             person_num = 0
+            person_offset_x = 0
+            person_offset_y = 0
+            head_duration_count = int(np.random.normal(10,20)+5)  # num of frames to keep looking at this person
+        elif np.random.randint(0,100) < 20:  # Look away a little
+            person_offset_x = np.random.randint(-50,50)
+            person_offset_y = np.random.randint(-15,15)
+            head_duration_count = int(np.random.normal(0,7)+2)  # num of frames to keep looking at this person
+            print("Look away: ", person_offset_x, person_offset_y)
         else:   # Switch person
             #print ("Switching person")
             person_num = np.random.randint(0,len(people_list))  # 0, num_people
-        head_duration_count = int(np.random.normal(1,10)+5)  # num of frames to keep looking at this person
+            person_offset_x = 0
+            person_offset_y = 0
+            head_duration_count = int(np.random.normal(10,20)+5)  # num of frames to keep looking at this person
     else:
         head_duration_count -= 1
 
     #print("person pos: ", people_list[person_num])
     # Move Head and arms
     if body_duration_count <= 0:  # Time for a new position
-        head_angle = int(np.random.normal(0, 12))
+        head_angle = int(np.random.normal(0, 17))
         if np.random.randint(0,100) < 3: # hands up
             arm_left_axis = 0
             arm_right_axis = 1
         else:
             arm_left_axis = abs((np.random.normal(0.4, 0.3)))
             arm_right_axis = abs((np.random.normal(0.1, 0.3)))
-        body_duration_count = int(np.random.normal(1,7))  # num of frames to keep same position
+        body_duration_count = int(np.random.normal(2,6))  # num of frames to keep same position
     else:
         body_duration_count -= 1
         
@@ -410,7 +423,11 @@ while True:
 
     # If camera is on the head, only move "move_scale" of the way to the new destination
     # Hopefully, this will prevent overshoot and precessing around the correct location 
-    move_physical_position(people_list[person_num], head_angle, arm_left_axis, arm_right_axis, enable_MC, move_scale, enable_head_camera)
+    person_x, person_y = people_list[person_num]
+    person_x += person_offset_x
+    person_y += person_offset_y
+    #print(person_offset_x, person_offset_y)
+    move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis, enable_MC, move_scale, enable_head_camera)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
