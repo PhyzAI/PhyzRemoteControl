@@ -257,7 +257,7 @@ if enable_face_detect:
 
 
 # Set up "Keith" recognition
-target_image_path = "Images/Keith100.jpg"
+target_image_path = "Images/Keith105.jpg"
 #target_image = mtcnn.detect(cv2.imread(target_image_path), landmarks=True)
 #mtcnn.detect(target_image, landmarks=False)
 target_image = face_recognition.load_image_file(target_image_path)
@@ -361,7 +361,8 @@ while True:
         people_list = []
         person_num = 0
         for box, prob in zip(boxes, probs): 
-            if prob > 0.90:
+            if prob > 0.70:
+                #print("adding face")
                 x_box_mid = int((box[0]+box[2])/2)
                 y_box_mid = int((box[1]+box[3])/2)
                 #frame = cv2.circle(frame, (x_box_mid,y_box_mid), radius=3, color=(0, 0, 255), thickness=3)
@@ -369,6 +370,19 @@ while True:
                 y_pos = (y_box_mid/image_size_y) * 200 - 100
                 people_list.append((x_pos,y_pos))
 
+                face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+                face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
+                cv2.imshow('image', face_region) 
+                cv2.moveWindow("image", 40,30)
+                encodings = face_recognition.face_encodings(face_region)
+                if encodings:
+                    #print("face encoded")
+                    dist = face_recognition.face_distance(encodings, target_encoding)
+                    print("dist: ", dist)
+                    if dist[0] < 0.6:
+                        print("  Keith!")
+
+                
 
     if len(people_list) > num_people:
         people_list = people_list[:num_people]
@@ -441,7 +455,7 @@ while True:
     if enable_GUI:
         draw_pos(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
         #print(pos_x, pos_y)
-        cv2.imshow('image', frame) 
+        #FIXME: cv2.imshow('image', frame) 
 
     # If camera is on the head, only move "move_scale" of the way to the new destination
     # Hopefully, this will prevent overshoot and precessing around the correct location 
