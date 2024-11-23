@@ -4,13 +4,14 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * add calibration offset to head  -- Check this works!
-# * Only look for heads when not moving??
-# * Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
+# * Add Face Recognition
+# X add calibration offset to head  -- Check this works!
+# XX Only look for heads when not moving??
+# XX Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
 #       This isn't working properly.  The motion of the head messes up face detection.
-# * Add some random head moves, and looking around if no face is detected
-# * Tweak calibration of Phyz head versus image center
-# * add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
+# X Add some random head moves, and looking around if no face is detected
+# X Tweak calibration of Phyz head versus image center
+# XX add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
 # X Make 1st camera wider angle of view.  S/W fix?
 # X Tracked location (red box  of a real face) does not exactly match circle drawn (green) 
 # X Pose changes should happen with a different cadence than changing people
@@ -46,14 +47,16 @@
 import pygame
 import cv2 
 import numpy as np
+import face_recognition
+import time
 
 
 # Enable different basic operations
 
 enable_GUI = True
-enable_MC = True  # enable Motor Control
+enable_MC = False  # enable Motor Control
 enable_face_detect = True
-enable_head_camera = False  #FIXME: Doesn't work properly
+enable_head_camera = False  #FIXME: Doesn't work properly. But fixed wide-angle camera seems good enough
 
 if enable_face_detect:
     from facenet_pytorch import MTCNN
@@ -251,6 +254,25 @@ pygame.init()
 # Create detector    
 if enable_face_detect:
     mtcnn = MTCNN()
+
+
+# Set up "Keith" recognition
+target_image_path = "Images/Keith100.jpg"
+#target_image = mtcnn.detect(cv2.imread(target_image_path), landmarks=True)
+#mtcnn.detect(target_image, landmarks=False)
+target_image = face_recognition.load_image_file(target_image_path)
+target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
+target = face_recognition.face_locations(target_image)
+#target_image = cv2.rectangle(target_image,     (target[0][1], target[0][0]),
+#                                (target[0][3], target[0][2]),
+#                                (0, 0, 255),
+#                                thickness=2)
+target_face = target_image[target[0][0]:target[0][2],
+                           target[0][3]:target[0][1]]
+cv2.imshow('image', target_face)
+cv2.waitKey(5000)
+target_encoding = face_recognition.face_encodings(target_image)[0]
+
 
 # Video Capture and display (only 1st 2 backends work on Win11?)
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   # CAP_MSMF, CAP_DSHOW, _FFMPEG, _GSTREAMER

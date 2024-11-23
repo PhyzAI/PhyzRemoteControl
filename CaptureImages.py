@@ -6,7 +6,7 @@ import time
 import os
 
 image_path = "./Images/"
-base_name = "microphone"
+base_name = "Keith"
 
 if not os.path.exists(image_path):
     os.mkdir(image_path)
@@ -34,7 +34,7 @@ while cap.isOpened():
     # Show the frame with detections
     cv2.imshow("Object Detection", frame)
 
-    time.sleep(2.5)
+    time.sleep(5.0)
 
     # Exit on pressing 'q'
     if cv2.waitKey(1) & 0xFF == ord('q'):
