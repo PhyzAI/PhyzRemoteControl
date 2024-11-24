@@ -5,7 +5,7 @@
 #
 # TODO:
 # * Add Face Recognition
-# X add calibration offset to head  -- Check this works!
+# X add calibration offset to head
 # XX Only look for heads when not moving??
 # XX Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
 #       This isn't working properly.  The motion of the head messes up face detection.
@@ -53,6 +53,7 @@ import time
 
 # Enable different basic operations
 
+HOME = True    # At Keith's house
 enable_GUI = True
 enable_MC = False  # enable Motor Control
 enable_face_detect = True
@@ -69,8 +70,10 @@ HEAD_OFFSET_Y = 0
 # FIXME: Choose correct com-port and device
 if enable_MC:
     import zmaestro as maestro
-    servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
-    #servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
+    if HOME:
+        servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
+    else:
+        servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
 
 
 num_people = 3   # *Maximum* number of "people" to include in the scene
@@ -190,6 +193,33 @@ def get_position(person_loc = [0,0], move_scale = 1.0):
     return(x_box_mid,y_box_mid)
 
 
+#################
+# Motor Control 
+#################
+
+def set_head_to_nominal():
+    servo.setTarget(head_x_channel, head_x_range[1])
+    servo.setTarget(head_y_channel, head_y_range[1])
+    servo.setTarget(head_tilt_channel, head_tilt_range[1])
+    servo.setTarget(arm_left_channel, arm_left_range[1])
+    servo.setTarget(arm_right_channel, arm_right_range[1])
+
+    #FIXME: tweak these while watching the hw
+    speed=80
+    servo.setSpeed(head_x_channel, speed)
+    servo.setSpeed(head_y_channel, speed//3)
+    servo.setSpeed(head_tilt_channel, speed//4)
+    servo.setSpeed(arm_left_channel, speed)
+    servo.setSpeed(arm_right_channel, speed)
+
+    accel = 2  #FIXME: tweak this
+    servo.setAccel(head_x_channel, 5*accel)
+    servo.setAccel(head_y_channel, 2*accel)
+    servo.setAccel(head_tilt_channel, accel)
+    servo.setAccel(arm_left_channel, accel)
+    servo.setAccel(arm_right_channel, accel)
+
+
 def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, enable_MC = False,
                             move_scale = 1.0, move_relative = False):
     """
@@ -247,46 +277,38 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, e
 ### MAIN ###
 ############
 
-print("*** Starting ***")
 
+print("*** Starting ***")
 pygame.init()
 
 # Create detector    
 if enable_face_detect:
     mtcnn = MTCNN()
 
-
 # Set up "Keith" recognition
-target_image_path = "Images/Keith105.jpg"
-#target_image = mtcnn.detect(cv2.imread(target_image_path), landmarks=True)
-#mtcnn.detect(target_image, landmarks=False)
+target_image_path = "Images/Keith100.jpg" # was 105
 target_image = face_recognition.load_image_file(target_image_path)
 target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
 target = face_recognition.face_locations(target_image)
-#target_image = cv2.rectangle(target_image,     (target[0][1], target[0][0]),
-#                                (target[0][3], target[0][2]),
-#                                (0, 0, 255),
-#                                thickness=2)
 target_face = target_image[target[0][0]:target[0][2],
                            target[0][3]:target[0][1]]
-cv2.imshow('image', target_face)
-cv2.waitKey(5000)
 target_encoding = face_recognition.face_encodings(target_image)[0]
 
 
 # Video Capture and display (only 1st 2 backends work on Win11?)
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   # CAP_MSMF, CAP_DSHOW, _FFMPEG, _GSTREAMER
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-print('opened video')
+if HOME:
+    cap = cv2.VideoCapture(0)  #FIXME: Home camera needs this, PhyzAI camera needs below.  Why???
+else:
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   # CAP_MSMF, CAP_DSHOW, _FFMPEG, _GSTREAMER
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 ret, frame = cap.read()
 image_size_x = frame.shape[1]
 image_size_y = frame.shape[0]
 
 clock = pygame.time.Clock()
 
-# Set head and arms (in image) to middle
+# Initialize on-screen Phyz 
 pos_x = image_size_x//2
 pos_y = image_size_y//2
 head_angle = 0
@@ -295,38 +317,20 @@ right_arm = 0
 
 
 # Set head servos to nominal
-if enable_MC:
-    servo.setTarget(head_x_channel, head_x_range[1])
-    servo.setTarget(head_y_channel, head_y_range[1])
-    servo.setTarget(head_tilt_channel, head_tilt_range[1])
-    servo.setTarget(arm_left_channel, arm_left_range[1])
-    servo.setTarget(arm_right_channel, arm_right_range[1])
+if enable_MC: set_head_to_nominal
 
-    #FIXME: tweak these while watching the hw
-    speed=80
-    servo.setSpeed(head_x_channel, speed)
-    servo.setSpeed(head_y_channel, speed//3)
-    servo.setSpeed(head_tilt_channel, speed//4)
-    servo.setSpeed(arm_left_channel, speed)
-    servo.setSpeed(arm_right_channel, speed)
-
-    accel = 2  #FIXME: tweak this
-    servo.setAccel(head_x_channel, 5*accel)
-    servo.setAccel(head_y_channel, 2*accel)
-    servo.setAccel(head_tilt_channel, accel)
-    servo.setAccel(arm_left_channel, accel)
-    servo.setAccel(arm_right_channel, accel)
-
-
+# Initialize stuff
 person_num = 0
 people_list = []
 time_to_live = 0   # Time that detected faces stay in case of nothing new detected
-
 head_duration_count = 0
 body_duration_count = 0
-
 person_offset_x = 0
 person_offset_y = 0
+
+
+
+### Main Loop ###
 
 while True:
     clock.tick(30)  # Frame Rate = 30 fps
@@ -342,16 +346,16 @@ while True:
     ret, frame = cap.read()
     frame = cv2.flip(frame, 1)
 
-    # Detect Faces and draw on frame
+
+    ### Detect Faces and draw on frame ###
+    
     if enable_face_detect: # and not head_is_moving:
         boxes, probs = mtcnn.detect(frame, landmarks=False)
         draw_face_boxes(frame, boxes, probs) #, landmarks)
     else:
         boxes = None
 
-    if (boxes is None) and (time_to_live > 0):
-        #pass
-        #people_list = [[0,0]]
+    if (boxes is None) and (time_to_live > 0):  # No face detected, but just keep to old state
         time_to_live -= 1
     elif (boxes is None) and (time_to_live <= 0):
         people_list = []
@@ -362,18 +366,17 @@ while True:
         person_num = 0
         for box, prob in zip(boxes, probs): 
             if prob > 0.70:
-                #print("adding face")
                 x_box_mid = int((box[0]+box[2])/2)
                 y_box_mid = int((box[1]+box[3])/2)
-                #frame = cv2.circle(frame, (x_box_mid,y_box_mid), radius=3, color=(0, 0, 255), thickness=3)
                 x_pos = (x_box_mid/image_size_x) * 200 - 100
                 y_pos = (y_box_mid/image_size_y) * 200 - 100
                 people_list.append((x_pos,y_pos))
 
+                # Look for known faces
                 face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
                 face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
-                cv2.imshow('image', face_region) 
-                cv2.moveWindow("image", 40,30)
+                #cv2.imshow('image', face_region) 
+                #cv2.moveWindow("image", 40,30)
                 encodings = face_recognition.face_encodings(face_region)
                 if encodings:
                     #print("face encoded")
@@ -381,8 +384,11 @@ while True:
                     print("dist: ", dist)
                     if dist[0] < 0.6:
                         print("  Keith!")
-
+                        frame = cv2.putText(frame, "Keith!", (int(box[2]), int(box[3]+35)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
                 
+
+
+    ### Choose select faces or do random if none found ###            
 
     if len(people_list) > num_people:
         people_list = people_list[:num_people]
@@ -421,8 +427,9 @@ while True:
     else:
         head_duration_count -= 1
 
-    #print("person pos: ", people_list[person_num])
-    # Move Head and arms
+
+    ### Tilt Head, move arms ###
+
     if body_duration_count <= 0:  # Time for a new position
         head_angle = int(np.random.normal(0, 17))
         if np.random.randint(0,100) < 3: # hands up
@@ -442,27 +449,29 @@ while True:
     else:
             move_scale = 1.0
         
-    # FIXME: scale so that new Phyz position is only part of the way to desired.  Prevents overshoot
-    # and (hopefully) precessing around the desired spot.
+
     try:
-        this_x, this_y = people_list[person_num]  # FIXME: how does this get out of bounds?????
+        this_x, this_y = people_list[person_num]  # FIXME: Why does this get out of bounds????
     except:
         this_x, this_y = (0,0)
         person_num = 0
-    this_x *= move_scale
+    
+    # FIXME: scale so that new Phyz position is only part of the way to desired.  Prevents overshoot
+    # and (hopefully) precessing around the desired spot.    this_x *= move_scale
     this_y *= move_scale
     pos_x, pos_y = get_position([this_x, this_y])
     if enable_GUI:
         draw_pos(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
-        #print(pos_x, pos_y)
-        #FIXME: cv2.imshow('image', frame) 
+        cv2.imshow('image', frame) 
 
-    # If camera is on the head, only move "move_scale" of the way to the new destination
-    # Hopefully, this will prevent overshoot and precessing around the correct location 
+
+
+    ### Add a bit of randomness to Phyz doesn't just stare directly at a person ###
+ 
     person_x, person_y = people_list[person_num]
     person_x += person_offset_x
     person_y += person_offset_y
-    #print(person_offset_x, person_offset_y)
+
     move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis, enable_MC, move_scale, enable_head_camera)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
