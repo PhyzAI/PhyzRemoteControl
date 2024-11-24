@@ -136,8 +136,8 @@ def draw_person_loc(image, pos_x, pos_y, color = (0, 100, 0)):
 
 
 
-def draw_phyz_position(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0): 
-    """ Draw an image of the current head and arm positions """
+def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0): 
+    """ Draw an image of the current head and arm positions (in screen-units, not ideal units) """
 
     # Ellipse for the head
     axesLength = (50, 100) 
@@ -177,7 +177,7 @@ def choose_people_locations(num_people = 5):
     return people_list
      
 
-def get_position(person_loc = [0,0], move_scale = 1.0):
+def get_screen_position(person_loc = [0,0], move_scale = 1.0):
     """ Translate Ideal person location to point on the screen """
     x_pos = person_loc[0]
     y_pos = person_loc[1]
@@ -221,26 +221,19 @@ def set_head_to_nominal():
     servo.setAccel(arm_right_channel, accel)
 
 
-def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, enable_MC = False,
-                            move_scale = 1.0, move_relative = False):
+def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, move_relative=False, move_scale=1.0):
     """
     Translate Ideal person location and head/arms to physical position.
     * Ideal is based on a -100 to +100 in x and y dimensions.
     """
 
     # Get actual camera (head) position
-    #print("pos: ", servo.getPosition(head_x_channel), servo.getPosition(head_y_channel))
-    if enable_MC:
-        head_x = servo.getPosition(head_x_channel)  #FIXME: Convert this to Ideal-plane 
-        head_x = (head_x - (head_x_range[0])) / (head_x_range[2]-head_x_range[0])
-        head_x = head_x * 200 - 100
-        head_y = servo.getPosition(head_y_channel)
-        head_y = (head_y - (head_y_range[0])) / (head_y_range[2]-head_y_range[0])
-        head_y = head_y * 200 - 100
-        #print("head pos (ideal): ", head_x, head_y)
-    else:
-        head_x = 0
-        head_y = 0
+    head_x = servo.getPosition(head_x_channel)  #FIXME: Convert this to Ideal-plane 
+    head_x = (head_x - (head_x_range[0])) / (head_x_range[2]-head_x_range[0])
+    head_x = head_x * 200 - 100
+    head_y = servo.getPosition(head_y_channel)
+    head_y = (head_y - (head_y_range[0])) / (head_y_range[2]-head_y_range[0])
+    head_y = head_y * 200 - 100
 
     if move_relative:
         x_loc = person_loc[0] - head_x
@@ -248,6 +241,7 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, e
     else:
         x_loc = person_loc[0] - HEAD_OFFSET_X
         y_loc = person_loc[1] - HEAD_OFFSET_Y
+
     x_scale = int(move_scale*(head_x_range[2] - head_x_range[0])/2 )
     y_scale = int(move_scale*(head_y_range[2] - head_y_range[0])/2 )
     x_pos = int(head_x_range[1] + x_loc*x_scale/100)   # FIXME: should head_x_range[1] be the subtraction 2 lines up???
@@ -261,13 +255,11 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, e
     arm_left_pos = int(arm_left_range[0] + left_arm*arm_left_scale)
     arm_right_pos = int(arm_right_range[0] + right_arm*arm_right_scale)
 
-    #print("x_pos, y_pos: ", x_pos, y_pos)
-    if enable_MC:
-        servo.setTarget(head_x_channel, x_pos)
-        servo.setTarget(head_y_channel, y_pos)
-        servo.setTarget(head_tilt_channel, head_pos)
-        servo.setTarget(arm_left_channel, arm_left_pos)
-        servo.setTarget(arm_right_channel, arm_right_pos)
+    servo.setTarget(head_x_channel, x_pos)
+    servo.setTarget(head_y_channel, y_pos)
+    servo.setTarget(head_tilt_channel, head_pos)
+    servo.setTarget(arm_left_channel, arm_left_pos)
+    servo.setTarget(arm_right_channel, arm_right_pos)
 
     return
 
@@ -329,19 +321,13 @@ body_duration_count = 0
 person_offset_x = 0
 person_offset_y = 0
 
-
+last_looked_away = False  # check if the last state was "look away", so you always come back to a person
 
 ### Main Loop ###
 
 while True:
+
     clock.tick(30)  # Frame Rate = 30 fps
-
-    if enable_MC:
-        head_is_moving = (servo.isMoving(head_x_channel) | servo.isMoving(head_y_channel) |
-              servo.isMoving(head_tilt_channel) )
-    else:
-        head_is_moving = False
-
 
     # Read the frame from the webcam
     ret, frame = cap.read()
@@ -350,7 +336,7 @@ while True:
 
     ### Detect Faces and draw on frame ###
     
-    if enable_face_detect: # and not head_is_moving:
+    if enable_face_detect:
         boxes, probs = mtcnn.detect(frame, landmarks=False)
         draw_face_boxes(frame, boxes, probs) #, landmarks)
     else:
@@ -389,6 +375,7 @@ while True:
                 
 
 
+
     ### Choose select faces or do random if none found ###            
 
     if len(people_list) > num_people:
@@ -403,28 +390,32 @@ while True:
         #print("random person: ", this_x, this_y)
 
     for person in people_list:
-        this_x, this_y = get_position(person)
+        this_x, this_y = get_screen_position(person)
         draw_person_loc(frame, this_x, this_y)
 
     # Look at one person, or switch
     if head_duration_count <= 0:
         # Make person 0 most likely
-        if np.random.randint(0,100) < 20:   # Look at the main person
-            person_num = 0
+        event_prob = np.random.randint(0,100)
+        if event_prob < 20 or last_looked_away:   # Look at the main (same) person
+            #person_num = 0
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = int(np.random.normal(10,20)+5)  # num of frames to keep looking at this person
-        elif np.random.randint(0,100) < 20:  # Look away a little
-            person_offset_x = np.random.randint(-50,50)
-            person_offset_y = np.random.randint(-15,15)
-            head_duration_count = int(np.random.normal(0,7)+2)  # num of frames to keep looking at this person
+            head_duration_count = int(np.random.normal(5,7)+5)  # num of frames to keep looking at this person
+            last_looked_away = False
+        elif event_prob < 80:  # Look away a little
+            person_offset_x = np.random.randint(10,30) * np.random.choice((-1,1))
+            person_offset_y = np.random.randint(-20,20)
+            head_duration_count = int(np.random.normal(2,5)+0)  # num of frames to keep looking at this person
+            last_looked_away = True
             print("Look away: ", person_offset_x, person_offset_y)
         else:   # Switch person
             #print ("Switching person")
-            person_num = np.random.randint(0,len(people_list))  # 0, num_people
+            person_num = np.random.randint(0,len(people_list))
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = int(np.random.normal(10,20)+5)  # num of frames to keep looking at this person
+            head_duration_count = int(np.random.normal(5,7)+5)  # num of frames to keep looking at this person
+            last_looked_away = False
     else:
         head_duration_count -= 1
 
@@ -449,27 +440,22 @@ while True:
     # except:
     #     this_x, this_y = (0,0)
     #     person_num = 0
-    pos_x, pos_y = get_position(people_list[person_num])
-    if enable_GUI:
-        draw_phyz_position(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
-        cv2.imshow('image', frame) 
+    #pos_x, pos_y = get_screen_position(people_list[person_num])
 
 
-
-    ### Add a bit of randomness to Phyz doesn't just stare directly at a person ###
- 
     person_x, person_y = people_list[person_num]
     person_x += person_offset_x
     person_y += person_offset_y
+    pos_x, pos_y = get_screen_position((person_x, person_y))
+    if enable_GUI:
+        draw_phyz_position(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
+        cv2.imshow('image', frame) 
+    if enable_MC:
+        move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis)
 
-    move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis, enable_MC, 1.0, False)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
-
-
-    
-    # print("Moving: ", head_is_moving )
 
     events = pygame.event.get()
     
