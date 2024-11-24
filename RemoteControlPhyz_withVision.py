@@ -5,6 +5,7 @@
 #
 # TODO:
 # * Add Face Recognition
+# * Remove camera-on-head (relative motion) code
 # X add calibration offset to head
 # XX Only look for heads when not moving??
 # XX Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
@@ -44,28 +45,30 @@
 # https://github.com/frc4564/maestro
 
 
-import pygame
-import cv2 
-import numpy as np
-import face_recognition
-import time
-
-
 # Enable different basic operations
 
 HOME = True    # At Keith's house
 enable_GUI = True
 enable_MC = False  # enable Motor Control
 enable_face_detect = True
-enable_head_camera = False  #FIXME: Doesn't work properly. But fixed wide-angle camera seems good enough
 
-if enable_face_detect:
-    from facenet_pytorch import MTCNN
 
+num_people = 3   # *Maximum* number of "people" to include in the scene
+FACE_DET_TTL = 25  # Hold-time for face detction interruptions (in ticks)
 
 # Calibration to get the head to face you exactly (hopefully)
 HEAD_OFFSET_X = 16
 HEAD_OFFSET_Y = 0
+
+
+import pygame
+import cv2 
+import numpy as np
+import face_recognition
+import time
+if enable_face_detect:
+    from facenet_pytorch import MTCNN
+
 
 # FIXME: Choose correct com-port and device
 if enable_MC:
@@ -76,8 +79,6 @@ if enable_MC:
         servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
 
 
-num_people = 3   # *Maximum* number of "people" to include in the scene
-FACE_DET_TTL = 25  # Hold-time for face detction interruptions (in ticks)
 
 # Servo Definitions
 
@@ -123,7 +124,7 @@ def draw_face_boxes(frame, boxes, probs):
 
 
 def draw_person_loc(image, pos_x, pos_y, color = (0, 100, 0)):
-    """ Draw an oval where each (random) face is located """
+    """ Draw an oval where each face is located """
     axesLength = (20, 40) 
     startAngle = 0
     endAngle = 360
@@ -135,7 +136,7 @@ def draw_person_loc(image, pos_x, pos_y, color = (0, 100, 0)):
 
 
 
-def draw_pos(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0): 
+def draw_phyz_position(image, pos_x,pos_y, angle=0, left_arm=0, right_arm=0): 
     """ Draw an image of the current head and arm positions """
 
     # Ellipse for the head
@@ -443,25 +444,14 @@ while True:
         body_duration_count -= 1
         
 
-
-    if enable_head_camera:
-            move_scale = 1.0 # 0.7
-    else:
-            move_scale = 1.0
-        
-
-    try:
-        this_x, this_y = people_list[person_num]  # FIXME: Why does this get out of bounds????
-    except:
-        this_x, this_y = (0,0)
-        person_num = 0
-    
-    # FIXME: scale so that new Phyz position is only part of the way to desired.  Prevents overshoot
-    # and (hopefully) precessing around the desired spot.    this_x *= move_scale
-    this_y *= move_scale
-    pos_x, pos_y = get_position([this_x, this_y])
+    # try:
+    #     this_x, this_y = people_list[person_num]  # FIXME: Why does this get out of bounds????
+    # except:
+    #     this_x, this_y = (0,0)
+    #     person_num = 0
+    pos_x, pos_y = get_position(people_list[person_num])
     if enable_GUI:
-        draw_pos(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
+        draw_phyz_position(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
         cv2.imshow('image', frame) 
 
 
@@ -472,7 +462,7 @@ while True:
     person_x += person_offset_x
     person_y += person_offset_y
 
-    move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis, enable_MC, move_scale, enable_head_camera)
+    move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis, enable_MC, 1.0, False)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
