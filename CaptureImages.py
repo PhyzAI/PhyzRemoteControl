@@ -14,7 +14,7 @@ if not os.path.exists(image_path):
 # Open the webcam
 cap = cv2.VideoCapture(0)  # Change 0 if using an external webcam
 
-count = 100
+count = 150
 
 while cap.isOpened():
     ret, frame = cap.read()

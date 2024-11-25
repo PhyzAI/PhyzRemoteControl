@@ -4,8 +4,10 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * Add Face Recognition
-# * Remove camera-on-head (relative motion) code
+# * Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
+# X Add Face Recognition
+# * Add back the random-faces if found-head-count is less than target head count
+# X Remove camera-on-head (relative motion) code
 # X add calibration offset to head
 # XX Only look for heads when not moving??
 # XX Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
@@ -68,6 +70,8 @@ import face_recognition
 import time
 if enable_face_detect:
     from facenet_pytorch import MTCNN
+    import tensorflow as tf
+    from tensorflow.keras.models import load_model
 
 
 # FIXME: Choose correct com-port and device
@@ -123,7 +127,7 @@ def draw_face_boxes(frame, boxes, probs):
         return frame
 
 
-def draw_person_loc(image, pos_x, pos_y, color = (0, 100, 0)):
+def draw_person_loc(image, pos_x, pos_y, face_name = "unknown", color = (0, 100, 0)):
     """ Draw an oval where each face is located """
     axesLength = (20, 40) 
     startAngle = 0
@@ -132,11 +136,12 @@ def draw_person_loc(image, pos_x, pos_y, color = (0, 100, 0)):
     angle = 0
     cv2.ellipse(image, (pos_x, pos_y), axesLength, 
            angle, startAngle, endAngle, color, thickness)
+    cv2.putText(image, face_name, (pos_x-15, pos_y+65), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
     return image
 
 
 
-def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0): 
+def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0, note=""): 
     """ Draw an image of the current head and arm positions (in screen-units, not ideal units) """
 
     # Ellipse for the head
@@ -168,6 +173,8 @@ def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0):
     cv2.ellipse(image, (pos_x+70, pos_y+40-int(40*right_arm)), axesLength, 
            0, startAngle, endAngle, color, thickness)
         
+    cv2.putText(image, note, (pos_x-45, pos_y+130), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
+
     return image
   
 
@@ -263,6 +270,60 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, m
 
     return
 
+import os
+import glob
+import re
+
+
+def get_pos_from_box(box):
+    x_box_mid = int((box[0]+box[2])/2)
+    y_box_mid = int((box[1]+box[3])/2)
+    x_pos = (x_box_mid/image_size_x) * 200 - 100
+    y_pos = (y_box_mid/image_size_y) * 200 - 100
+    return (x_pos, y_pos)
+
+
+def generate_encodings_from_dir(directory):
+    """Scan for jpg files in a directory.  Generate a list of encodings for Facial Recognition"""
+    face_encodings = []
+    face_names = []
+    for file in os.listdir(directory):
+        if file.endswith(".jpg"):
+            file_path = os.path.join(directory, file)
+
+
+            # Set up "Keith" recognition
+            #target_image_path = "Images/Keith100.jpg" # was 105
+            target_image = face_recognition.load_image_file(file_path)
+            target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
+            target = face_recognition.face_locations(target_image)
+            #target_face = target_image[target[0][0]:target[0][2],
+            #                        target[0][3]:target[0][1]]
+            target_encoding = face_recognition.face_encodings(target_image)[0]
+
+            # Use a regular expression to match the alphabetic part of the filename
+            match = re.match(r"([a-zA-Z]+)", file)      
+            if match:
+                face_names.append(match.group(1))
+                face_encodings.append(target_encoding)
+            else:
+                assert False
+    return (face_names, face_encodings)
+
+#face_names, face_encodings = generate_encodings_from_dir("./KnownFaces/")
+#print(face_names)
+
+def preprocess_face(image, target_size=(160, 160)):
+    """
+    Preprocess the face for FaceNet encoding.
+    Resize, normalize, and expand dimensions.
+    """
+    face = cv2.resize(image, target_size)
+    face = face.astype('float32') / 255.0  # Normalize pixel values
+    face = np.expand_dims(face, axis=0)    # Add batch dimension
+    return face
+
+
 
 
 
@@ -279,14 +340,16 @@ if enable_face_detect:
     mtcnn = MTCNN()
 
 # Set up "Keith" recognition
-target_image_path = "Images/Keith100.jpg" # was 105
-target_image = face_recognition.load_image_file(target_image_path)
-target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
-target = face_recognition.face_locations(target_image)
-target_face = target_image[target[0][0]:target[0][2],
-                           target[0][3]:target[0][1]]
-target_encoding = face_recognition.face_encodings(target_image)[0]
-
+# target_image_path = "Images/Keith100.jpg" # was 105
+# target_image = face_recognition.load_image_file(target_image_path)
+# target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
+# target = face_recognition.face_locations(target_image)
+# target_face = target_image[target[0][0]:target[0][2],
+#                            target[0][3]:target[0][1]]
+# target_encoding = face_recognition.face_encodings(target_image)[0]
+face_names, face_encodings = generate_encodings_from_dir("./KnownFaces/")
+face_name = face_names[0]
+target_encoding = face_encodings[0]
 
 # Video Capture and display (only 1st 2 backends work on Win11?)
 if HOME:
@@ -338,7 +401,7 @@ while True:
     
     if enable_face_detect:
         boxes, probs = mtcnn.detect(frame, landmarks=False)
-        draw_face_boxes(frame, boxes, probs) #, landmarks)
+        #draw_face_boxes(frame, boxes, probs) #, landmarks)
     else:
         boxes = None
 
@@ -353,25 +416,32 @@ while True:
         person_num = 0
         for box, prob in zip(boxes, probs): 
             if prob > 0.70:
-                x_box_mid = int((box[0]+box[2])/2)
-                y_box_mid = int((box[1]+box[3])/2)
-                x_pos = (x_box_mid/image_size_x) * 200 - 100
-                y_pos = (y_box_mid/image_size_y) * 200 - 100
-                people_list.append((x_pos,y_pos))
-
                 # Look for known faces
                 face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
                 face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
-                #cv2.imshow('image', face_region) 
-                #cv2.moveWindow("image", 40,30)
-                encodings = face_recognition.face_encodings(face_region)
-                if encodings:
-                    #print("face encoded")
-                    dist = face_recognition.face_distance(encodings, target_encoding)
-                    print("dist: ", dist)
-                    if dist[0] < 0.6:
-                        print("  Keith!")
-                        frame = cv2.putText(frame, "Keith!", (int(box[2]), int(box[3]+35)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+                cv2.imshow('face_region', face_region) 
+                cv2.moveWindow("face_region", 40,30)
+                this_face_encodings = face_recognition.face_encodings(face_region)
+                if this_face_encodings:
+                    found_faces = face_recognition.compare_faces(face_encodings, this_face_encodings[0])
+                    print("Found face in region")
+                    this_face_index = np.where(found_faces)
+                    if this_face_index:
+                        print("Found face index:", this_face_index[0][0])
+                        face_name = face_names[this_face_index[0][0]]
+                else:
+                    face_name = "unknown"
+
+                pos_x, pos_y = get_pos_from_box(box)
+                people_list.append((pos_x, pos_y, face_name))
+    
+                # if encodings:
+                #     #print("face encoded")
+                #     dist = face_recognition.face_distance(encodings, target_encoding)
+                #     print("dist: ", dist)
+                #     if dist[0] < 0.6:
+                #         #print("  Keith!")
+                #         frame = cv2.putText(frame, face_name, (int(box[2]), int(box[3]+35)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
                 
 
 
@@ -384,14 +454,14 @@ while True:
         #people_list = [[0,0]]
         this_x = int(np.random.normal(0, 20)) # np.random.randint(-30,30)
         this_y = int(np.random.normal(0, 10)) #np.random.randint(-25,25)
-        people_list = [[this_x, this_y]]
+        people_list = [[this_x, this_y, "random"]]
         person_num = 0
         time_to_live = FACE_DET_TTL
         #print("random person: ", this_x, this_y)
 
-    for person in people_list:
-        this_x, this_y = get_screen_position(person)
-        draw_person_loc(frame, this_x, this_y)
+    for person_x, person_y, person_name in people_list:
+        this_x, this_y = get_screen_position((person_x, person_y))
+        draw_person_loc(frame, this_x, this_y, person_name)
 
     # Look at one person, or switch
     if head_duration_count <= 0:
@@ -403,12 +473,14 @@ while True:
             person_offset_y = 0
             head_duration_count = int(np.random.normal(5,7)+5)  # num of frames to keep looking at this person
             last_looked_away = False
+            phyz_note = ""
         elif event_prob < 80:  # Look away a little
             person_offset_x = np.random.randint(10,30) * np.random.choice((-1,1))
             person_offset_y = np.random.randint(-20,20)
             head_duration_count = int(np.random.normal(2,5)+0)  # num of frames to keep looking at this person
             last_looked_away = True
-            print("Look away: ", person_offset_x, person_offset_y)
+            #print("Look away: ", person_offset_x, person_offset_y)
+            phyz_note = "Glance"
         else:   # Switch person
             #print ("Switching person")
             person_num = np.random.randint(0,len(people_list))
@@ -416,6 +488,7 @@ while True:
             person_offset_y = 0
             head_duration_count = int(np.random.normal(5,7)+5)  # num of frames to keep looking at this person
             last_looked_away = False
+            phyz_note = ""
     else:
         head_duration_count -= 1
 
@@ -443,12 +516,12 @@ while True:
     #pos_x, pos_y = get_screen_position(people_list[person_num])
 
 
-    person_x, person_y = people_list[person_num]
+    person_x, person_y, person_name = people_list[person_num]
     person_x += person_offset_x
     person_y += person_offset_y
     pos_x, pos_y = get_screen_position((person_x, person_y))
     if enable_GUI:
-        draw_phyz_position(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis)
+        draw_phyz_position(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis, phyz_note)
         cv2.imshow('image', frame) 
     if enable_MC:
         move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis)

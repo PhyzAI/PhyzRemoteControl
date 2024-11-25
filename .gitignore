@@ -2,7 +2,7 @@
 ._RemoteControlPhyz01.py
 ._zmaestro.py
 /__pycache__
-*.jpg
+
 ._*
 /Microphone-1
 /Microphone.v1i.yolov11
@@ -11,3 +11,4 @@
 /PhyzObjectDetection.v2i.yolov11
 /runs
 Basic Object detection with YOLO 2'.py
+/Images
