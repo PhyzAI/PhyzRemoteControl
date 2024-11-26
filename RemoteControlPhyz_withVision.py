@@ -53,6 +53,7 @@ HOME = True    # At Keith's house
 enable_GUI = True
 enable_MC = False  # enable Motor Control
 enable_face_detect = True
+enable_show_phyz_loc = False
 
 
 num_people = 3   # *Maximum* number of "people" to include in the scene
@@ -68,11 +69,16 @@ import cv2
 import numpy as np
 import face_recognition
 import time
-if enable_face_detect:
-    from facenet_pytorch import MTCNN
-    import tensorflow as tf
-    from tensorflow.keras.models import load_model
+#if enable_face_detect:
+from facenet_pytorch import MTCNN
+#import tensorflow as tf
+##from tensorflow.keras.models import load_model
+#from keras.models import load_model
+#model_path = "./facenet_keras.h5"
+#facenet_model = load_model(model_path)
 
+from keras_facenet import FaceNet
+embedder = FaceNet()
 
 # FIXME: Choose correct com-port and device
 if enable_MC:
@@ -285,33 +291,51 @@ def get_pos_from_box(box):
 
 def generate_encodings_from_dir(directory):
     """Scan for jpg files in a directory.  Generate a list of encodings for Facial Recognition"""
-    face_encodings = []
-    face_names = []
+    #face_encodings = []
+    #face_names = []
+    known_faces = []
     for file in os.listdir(directory):
         if file.endswith(".jpg"):
             file_path = os.path.join(directory, file)
 
-
-            # Set up "Keith" recognition
-            #target_image_path = "Images/Keith100.jpg" # was 105
-            target_image = face_recognition.load_image_file(file_path)
+            #target_image = face_recognition.load_image_file(file_path)
+            target_image = cv2.imread(file_path)
             target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
-            target = face_recognition.face_locations(target_image)
-            #target_face = target_image[target[0][0]:target[0][2],
-            #                        target[0][3]:target[0][1]]
-            target_encoding = face_recognition.face_encodings(target_image)[0]
 
+            #target = face_recognition.face_locations(target_image)
+            this_face_encodings = embedder.extract(target_image, threshold=0.90) # face_region  
+            if this_face_encodings:
+                this_face_encoding = this_face_encodings[0]['embedding']
             # Use a regular expression to match the alphabetic part of the filename
-            match = re.match(r"([a-zA-Z]+)", file)      
-            if match:
-                face_names.append(match.group(1))
-                face_encodings.append(target_encoding)
-            else:
-                assert False
-    return (face_names, face_encodings)
+                match = re.match(r"([a-zA-Z]+)", file)      
+                if match:
+                    known_faces.append((match.group(1), this_face_encoding))
+                    #face_encodings.append(target_encoding)
+                else:
+                    assert False
+    return known_faces
 
-#face_names, face_encodings = generate_encodings_from_dir("./KnownFaces/")
-#print(face_names)
+#known_faces = generate_encodings_from_dir("./KnownFaces/")
+#print(kf)
+#print("")
+
+def calculate_distance(embedding1, embedding2):
+    """
+    Computes the Euclidean distance between two face embeddings.
+    """
+    return np.linalg.norm(embedding1 - embedding2)
+
+
+def check_for_face(target_encoding, threshold, known_faces):
+    for face_name, face_encoding in known_faces:
+        dist = calculate_distance(target_encoding, face_encoding)
+        print("face_name, dist: ", face_name, dist)
+        if dist <= threshold:
+            return face_name
+    return ("None")
+        
+
+
 
 def preprocess_face(image, target_size=(160, 160)):
     """
@@ -338,18 +362,11 @@ pygame.init()
 # Create detector    
 if enable_face_detect:
     mtcnn = MTCNN()
+    known_faces = generate_encodings_from_dir("./KnownFaces/")
 
-# Set up "Keith" recognition
-# target_image_path = "Images/Keith100.jpg" # was 105
-# target_image = face_recognition.load_image_file(target_image_path)
-# target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
-# target = face_recognition.face_locations(target_image)
-# target_face = target_image[target[0][0]:target[0][2],
-#                            target[0][3]:target[0][1]]
-# target_encoding = face_recognition.face_encodings(target_image)[0]
-face_names, face_encodings = generate_encodings_from_dir("./KnownFaces/")
-face_name = face_names[0]
-target_encoding = face_encodings[0]
+#face_names, face_encodings = generate_encodings_from_dir("./KnownFaces/")
+#face_name = face_names[0]
+#target_encoding = face_encodings[0]
 
 # Video Capture and display (only 1st 2 backends work on Win11?)
 if HOME:
@@ -415,34 +432,23 @@ while True:
         people_list = []
         person_num = 0
         for box, prob in zip(boxes, probs): 
-            if prob > 0.70:
+            if prob > 0.90:
                 # Look for known faces
                 face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
                 face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
                 cv2.imshow('face_region', face_region) 
                 cv2.moveWindow("face_region", 40,30)
-                this_face_encodings = face_recognition.face_encodings(face_region)
+
+                this_face_encodings = embedder.extract(face_region, threshold=0.90) # face_region
                 if this_face_encodings:
-                    found_faces = face_recognition.compare_faces(face_encodings, this_face_encodings[0])
-                    print("Found face in region")
-                    this_face_index = np.where(found_faces)
-                    if this_face_index:
-                        print("Found face index:", this_face_index[0][0])
-                        face_name = face_names[this_face_index[0][0]]
+                    this_face_encoding = this_face_encodings[0]['embedding']
+                    face_name = check_for_face(this_face_encoding, 0.8, known_faces)
+                    print(face_name)
                 else:
                     face_name = "unknown"
 
                 pos_x, pos_y = get_pos_from_box(box)
-                people_list.append((pos_x, pos_y, face_name))
-    
-                # if encodings:
-                #     #print("face encoded")
-                #     dist = face_recognition.face_distance(encodings, target_encoding)
-                #     print("dist: ", dist)
-                #     if dist[0] < 0.6:
-                #         #print("  Keith!")
-                #         frame = cv2.putText(frame, face_name, (int(box[2]), int(box[3]+35)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
-                
+                people_list.append((pos_x, pos_y, face_name))                
 
 
 
@@ -506,22 +512,14 @@ while True:
         body_duration_count = int(np.random.normal(2,6))  # num of frames to keep same position
     else:
         body_duration_count -= 1
-        
-
-    # try:
-    #     this_x, this_y = people_list[person_num]  # FIXME: Why does this get out of bounds????
-    # except:
-    #     this_x, this_y = (0,0)
-    #     person_num = 0
-    #pos_x, pos_y = get_screen_position(people_list[person_num])
-
+    
 
     person_x, person_y, person_name = people_list[person_num]
     person_x += person_offset_x
     person_y += person_offset_y
     pos_x, pos_y = get_screen_position((person_x, person_y))
     if enable_GUI:
-        draw_phyz_position(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis, phyz_note)
+        if enable_show_phyz_loc: draw_phyz_position(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis, phyz_note)
         cv2.imshow('image', frame) 
     if enable_MC:
         move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis)
