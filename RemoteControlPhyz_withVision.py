@@ -58,6 +58,7 @@ enable_show_phyz_loc = False
 
 num_people = 3   # *Maximum* number of "people" to include in the scene
 FACE_DET_TTL = 25  # Hold-time for face detction interruptions (in ticks)
+FACE_NAME_TTL = 25 # Hold-time for a named face (in ticks)
 
 # Calibration to get the head to face you exactly (hopefully)
 HEAD_OFFSET_X = 16
@@ -332,8 +333,20 @@ def check_for_face(target_encoding, threshold, known_faces):
         print("face_name, dist: ", face_name, dist)
         if dist <= threshold:
             return face_name
-    return ("None")
+    return ("")
         
+def check_region_for_known_face(face_region, thresh, known_faces):
+    this_face_encodings = embedder.extract(face_region, threshold=thresh) # face_region
+    if this_face_encodings:
+        this_face_encoding = this_face_encodings[0]['embedding']
+        face_name = check_for_face(this_face_encoding, 0.8, known_faces)
+        print(face_name)
+        fn_ttl = FACE_NAME_TTL
+    else:
+        face_name = ""
+        #fn_ttl = 0
+    return face_name
+
 
 
 
@@ -402,6 +415,7 @@ person_offset_x = 0
 person_offset_y = 0
 
 last_looked_away = False  # check if the last state was "look away", so you always come back to a person
+current_face_name = ""
 
 ### Main Loop ###
 
@@ -435,20 +449,22 @@ while True:
             if prob > 0.90:
                 # Look for known faces
                 face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
-                face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
+                #face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
+
+                ycrcb = cv2.cvtColor(face_region, cv2.COLOR_BGR2YCrCb)
+
+                # Equalize the Y channel
+                ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0])
+
+                # Convert back to BGR
+                face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+
+
                 cv2.imshow('face_region', face_region) 
                 cv2.moveWindow("face_region", 40,30)
 
-                this_face_encodings = embedder.extract(face_region, threshold=0.90) # face_region
-                if this_face_encodings:
-                    this_face_encoding = this_face_encodings[0]['embedding']
-                    face_name = check_for_face(this_face_encoding, 0.8, known_faces)
-                    print(face_name)
-                else:
-                    face_name = "unknown"
-
                 pos_x, pos_y = get_pos_from_box(box)
-                people_list.append((pos_x, pos_y, face_name))                
+                people_list.append((pos_x, pos_y, face_region))                
 
 
 
@@ -460,14 +476,14 @@ while True:
         #people_list = [[0,0]]
         this_x = int(np.random.normal(0, 20)) # np.random.randint(-30,30)
         this_y = int(np.random.normal(0, 10)) #np.random.randint(-25,25)
-        people_list = [[this_x, this_y, "random"]]
+        people_list = [[this_x, this_y, []]]
         person_num = 0
         time_to_live = FACE_DET_TTL
         #print("random person: ", this_x, this_y)
 
-    for person_x, person_y, person_name in people_list:
+    for person_x, person_y, _ in people_list:
         this_x, this_y = get_screen_position((person_x, person_y))
-        draw_person_loc(frame, this_x, this_y, person_name)
+        draw_person_loc(frame, this_x, this_y, "")
 
     # Look at one person, or switch
     if head_duration_count <= 0:
@@ -480,6 +496,7 @@ while True:
             head_duration_count = int(np.random.normal(5,7)+5)  # num of frames to keep looking at this person
             last_looked_away = False
             phyz_note = ""
+            current_face_name = ""
         elif event_prob < 80:  # Look away a little
             person_offset_x = np.random.randint(10,30) * np.random.choice((-1,1))
             person_offset_y = np.random.randint(-20,20)
@@ -495,8 +512,11 @@ while True:
             head_duration_count = int(np.random.normal(5,7)+5)  # num of frames to keep looking at this person
             last_looked_away = False
             phyz_note = ""
+            current_face_name = ""
     else:
         head_duration_count -= 1
+        face_name = check_region_for_known_face
+
 
 
     ### Tilt Head, move arms ###
@@ -513,8 +533,18 @@ while True:
     else:
         body_duration_count -= 1
     
+    
+    person_x, person_y, person_face_region = people_list[person_num]
+    # only check for known_face of person actually being looked at
+    if (current_face_name == "") and (len(person_face_region) > 0):
+        face_name = check_region_for_known_face(person_face_region, 0.6, known_faces)
+        if len(face_name) > 0:
+            current_face_name = face_name
+            print("Found a known face: ", face_name)
+    this_x, this_y = get_screen_position((person_x, person_y))
+    #draw_person_loc(frame, this_x, this_y, current_face_name, (0, 100, 100))
+    draw_person_loc(frame, this_x, this_y, current_face_name, (0, 100, 100))
 
-    person_x, person_y, person_name = people_list[person_num]
     person_x += person_offset_x
     person_y += person_offset_y
     pos_x, pos_y = get_screen_position((person_x, person_y))
