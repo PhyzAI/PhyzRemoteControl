@@ -228,7 +228,7 @@ def set_head_to_nominal():
     servo.setSpeed(arm_right_channel, speed)
 
     accel = 2  #FIXME: tweak this
-    servo.setAccel(head_x_channel, 3*accel)
+    servo.setAccel(head_x_channel, 1*accel)
     servo.setAccel(head_y_channel, 1*accel)
     servo.setAccel(head_tilt_channel, accel)
     servo.setAccel(arm_left_channel, accel)
