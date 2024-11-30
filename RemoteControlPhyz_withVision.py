@@ -49,9 +49,9 @@
 
 # Enable different basic operations
 
-HOME = True    # At Keith's house
+HOME = False    # At Keith's house
 enable_GUI = True
-enable_MC = False  # enable Motor Control
+enable_MC = True # enable Motor Control
 enable_face_detect = True
 enable_show_phyz_loc = False
 
@@ -228,8 +228,8 @@ def set_head_to_nominal():
     servo.setSpeed(arm_right_channel, speed)
 
     accel = 2  #FIXME: tweak this
-    servo.setAccel(head_x_channel, 5*accel)
-    servo.setAccel(head_y_channel, 2*accel)
+    servo.setAccel(head_x_channel, 3*accel)
+    servo.setAccel(head_y_channel, 1*accel)
     servo.setAccel(head_tilt_channel, accel)
     servo.setAccel(arm_left_channel, accel)
     servo.setAccel(arm_right_channel, accel)
@@ -421,7 +421,7 @@ current_face_name = ""
 
 while True:
 
-    clock.tick(30)  # Frame Rate = 30 fps
+    clock.tick(15)  # Frame Rate = 30 fps
 
     # Read the frame from the webcam
     ret, frame = cap.read()
@@ -447,23 +447,31 @@ while True:
         person_num = 0
         for box, prob in zip(boxes, probs): 
             if prob > 0.90:
-                # Look for known faces
-                face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
-                #face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
 
-                ycrcb = cv2.cvtColor(face_region, cv2.COLOR_BGR2YCrCb)
-
-                # Equalize the Y channel
-                ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0])
-
-                # Convert back to BGR
-                face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+                try:
+                    # Look for known faces
+                    face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+                    #face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
 
 
-                cv2.imshow('face_region', face_region) 
-                cv2.moveWindow("face_region", 40,30)
+                    # FIXME: Keeps crashing on below
+                    ycrcb = cv2.cvtColor(face_region, cv2.COLOR_BGR2YCrCb)
 
-                pos_x, pos_y = get_pos_from_box(box)
+                    # Equalize the Y channel
+                    ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0])
+
+                    # Convert back to BGR
+                    face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+
+
+                    cv2.imshow('face_region', face_region) 
+                    cv2.moveWindow("face_region", 40,30)
+
+                    pos_x, pos_y = get_pos_from_box(box)
+                except:
+                    pos_x = 0
+                    pos_y = 0
+                    face_region = []
                 people_list.append((pos_x, pos_y, face_region))                
 
 
@@ -543,7 +551,7 @@ while True:
             print("Found a known face: ", face_name)
     this_x, this_y = get_screen_position((person_x, person_y))
     #draw_person_loc(frame, this_x, this_y, current_face_name, (0, 100, 100))
-    draw_person_loc(frame, this_x, this_y, current_face_name, (0, 100, 100))
+    draw_person_loc(frame, this_x, this_y, current_face_name, (0, 200, 200))
 
     person_x += person_offset_x
     person_y += person_offset_y
