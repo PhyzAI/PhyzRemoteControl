@@ -4,7 +4,8 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
+# * Add space/location to face detection: if too far from current spot, dump the current name
+# X Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
 # X Add Face Recognition
 # * Add back the random-faces if found-head-count is less than target head count
 # X Remove camera-on-head (relative motion) code
@@ -49,16 +50,18 @@
 
 # Enable different basic operations
 
-HOME = False    # At Keith's house
+HOME = True    # At Keith's house
 enable_GUI = True
-enable_MC = True # enable Motor Control
+enable_MC = False # enable Motor Control
 enable_face_detect = True
-enable_show_phyz_loc = False
+enable_show_phyz_loc = True
+enable_randomize_look = False # Look around a little bit for each face
+enable_face_camera = False # Look more straight ahead
 
 
-num_people = 3   # *Maximum* number of "people" to include in the scene
-FACE_DET_TTL = 25  # Hold-time for face detction interruptions (in ticks)
-FACE_NAME_TTL = 25 # Hold-time for a named face (in ticks)
+num_people = 5   # *Maximum* number of "people" to include in the scene
+FACE_DET_TTL = 30  # Hold-time for face detction interruptions (in ticks)
+FACE_NAME_TTL = 30 # Hold-time for a named face (in ticks)
 
 # Calibration to get the head to face you exactly (hopefully)
 HEAD_OFFSET_X = 16
@@ -134,7 +137,7 @@ def draw_face_boxes(frame, boxes, probs):
         return frame
 
 
-def draw_person_loc(image, pos_x, pos_y, face_name = "unknown", color = (0, 100, 0)):
+def draw_person_loc(image, pos_x, pos_y, face_name = "unknown", color = (0, 200, 0)):
     """ Draw an oval where each face is located """
     axesLength = (20, 40) 
     startAngle = 0
@@ -187,7 +190,15 @@ def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0, no
 
 def choose_people_locations(num_people = 5):
     """return a list of people, where each pair shows percentage of total range available"""
-    people_list = np.random.randint(-90, 90, (num_people,2))
+    #people_list = np.random.randint(-90, 90, (num_people,2))
+    people_list = []
+    for i in range(num_people):
+        #people_list = [[0,0]]
+        this_x = np.random.randint(-80,80)
+        this_x = np.random.randint(10,80) * np.random.choice((-1,1))
+        this_y = np.random.randint(-25,25)
+        people_list.append([this_x, this_y, []])
+        
     return people_list
      
 
@@ -301,7 +312,10 @@ def generate_encodings_from_dir(directory):
 
             #target_image = face_recognition.load_image_file(file_path)
             target_image = cv2.imread(file_path)
-            target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
+            if target_image is not None:
+                target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
+            else:
+                continue
 
             #target = face_recognition.face_locations(target_image)
             this_face_encodings = embedder.extract(target_image, threshold=0.90) # face_region  
@@ -347,7 +361,9 @@ def check_region_for_known_face(face_region, thresh, known_faces):
         #fn_ttl = 0
     return face_name
 
-
+import math
+def calc_face_dist(face_a_x, face_a_y, face_b_x, face_b_y):
+    return math.sqrt( math.pow( (face_a_x - face_b_x),2) + math.pow((face_a_y - face_b_y) ,2) )
 
 
 def preprocess_face(image, target_size=(160, 160)):
@@ -416,12 +432,24 @@ person_offset_y = 0
 
 last_looked_away = False  # check if the last state was "look away", so you always come back to a person
 current_face_name = ""
+known_face_x = 9999
+known_face_y = 9999
+
+
+if num_people > 0:
+    random_people_list = choose_people_locations(num_people) 
+    if enable_face_camera:
+        random_people_list[0] = [0, 0, []]
+else:
+    random_people_list = []
+
+
 
 ### Main Loop ###
 
 while True:
 
-    clock.tick(15)  # Frame Rate = 30 fps
+    clock.tick(30)  # Frame Rate = 30 fps
 
     # Read the frame from the webcam
     ret, frame = cap.read()
@@ -440,11 +468,11 @@ while True:
         time_to_live -= 1
     elif (boxes is None) and (time_to_live <= 0):
         people_list = []
-        person_num = 0
+        #person_num = 0
     else:
         time_to_live = FACE_DET_TTL  # number of frames to ignore if no people detected
         people_list = []
-        person_num = 0
+        #person_num = 0
         for box, prob in zip(boxes, probs): 
             if prob > 0.90:
 
@@ -453,8 +481,6 @@ while True:
                     face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
                     #face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
 
-
-                    # FIXME: Keeps crashing on below
                     ycrcb = cv2.cvtColor(face_region, cv2.COLOR_BGR2YCrCb)
 
                     # Equalize the Y channel
@@ -462,7 +488,6 @@ while True:
 
                     # Convert back to BGR
                     face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
-
 
                     cv2.imshow('face_region', face_region) 
                     cv2.moveWindow("face_region", 40,30)
@@ -478,16 +503,19 @@ while True:
 
     ### Choose select faces or do random if none found ###            
 
-    if len(people_list) > num_people:
+    if len(people_list) < num_people:
+        delta = num_people - len(people_list)
+        people_list.extend(random_people_list[:delta])
+    elif len(people_list) > num_people:
         people_list = people_list[:num_people]
-    elif len(people_list) == 0:
-        #people_list = [[0,0]]
-        this_x = int(np.random.normal(0, 20)) # np.random.randint(-30,30)
-        this_y = int(np.random.normal(0, 10)) #np.random.randint(-25,25)
-        people_list = [[this_x, this_y, []]]
-        person_num = 0
-        time_to_live = FACE_DET_TTL
-        #print("random person: ", this_x, this_y)
+    # elif len(people_list) == 0:
+    #     #people_list = [[0,0]]
+    #     this_x = int(np.random.normal(0, 20)) # np.random.randint(-30,30)
+    #     this_y = int(np.random.normal(0, 10)) #np.random.randint(-25,25)
+    #     people_list = [[this_x, this_y, []]]
+    #     person_num = 0
+    #     time_to_live = FACE_DET_TTL
+    #     #print("random person: ", this_x, this_y)
 
     for person_x, person_y, _ in people_list:
         this_x, this_y = get_screen_position((person_x, person_y))
@@ -497,40 +525,41 @@ while True:
     if head_duration_count <= 0:
         # Make person 0 most likely
         event_prob = np.random.randint(0,100)
-        if event_prob < 20 or last_looked_away:   # Look at the main (same) person
-            #person_num = 0
+        if event_prob < 50:   # Look at the main (same) person
+            person_num = 0
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = int(np.random.normal(5,7)+5)  # num of frames to keep looking at this person
+            head_duration_count = abs(int(np.random.normal(15,25)))+10  # num of frames to keep looking at this person
             last_looked_away = False
             phyz_note = ""
             current_face_name = ""
-        elif event_prob < 80:  # Look away a little
-            person_offset_x = np.random.randint(10,30) * np.random.choice((-1,1))
-            person_offset_y = np.random.randint(-20,20)
-            head_duration_count = int(np.random.normal(2,5)+0)  # num of frames to keep looking at this person
+        elif event_prob < 60 and enable_randomize_look:  # Look away a little
+            person_offset_x = np.random.randint(5,10) * np.random.choice((-1,1))
+            person_offset_y = np.random.randint(-5,5)
+            head_duration_count = abs(int(np.random.normal(5,10)))+5  # num of frames to keep looking at this person
             last_looked_away = True
-            #print("Look away: ", person_offset_x, person_offset_y)
+            print("Look away: ", person_offset_x, person_offset_y)
             phyz_note = "Glance"
         else:   # Switch person
-            #print ("Switching person")
             person_num = np.random.randint(0,len(people_list))
+            print ("Switching person: ", person_num)
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = int(np.random.normal(5,7)+5)  # num of frames to keep looking at this person
+            head_duration_count = abs(int(np.random.normal(15,25)))+10  # num of frames to keep looking at this person
             last_looked_away = False
             phyz_note = ""
             current_face_name = ""
     else:
         head_duration_count -= 1
-        face_name = check_region_for_known_face
+        #face_name = check_region_for_known_face
 
-
+    #print("Head Duration Count, person: ", head_duration_count, person_num)
+    
 
     ### Tilt Head, move arms ###
 
     if body_duration_count <= 0:  # Time for a new position
-        head_angle = int(np.random.normal(0, 17))
+        head_angle = int(np.random.normal(0, 10))
         if np.random.randint(0,100) < 3: # hands up
             arm_left_axis = 0
             arm_right_axis = 1
@@ -550,8 +579,15 @@ while True:
             current_face_name = face_name
             print("Found a known face: ", face_name)
     this_x, this_y = get_screen_position((person_x, person_y))
-    #draw_person_loc(frame, this_x, this_y, current_face_name, (0, 100, 100))
+    
+    # FIXME: Did this get rid of "hanging on to know face too long" problem???
+    #if calc_face_dist(this_x, this_y, known_face_x, known_face_y) > 10:
+    #    current_face_name = ""
+    #known_face_x = this_x
+    #known_face_y = this_y
+
     draw_person_loc(frame, this_x, this_y, current_face_name, (0, 200, 200))
+    
 
     person_x += person_offset_x
     person_y += person_offset_y
