@@ -7,7 +7,7 @@
 # * Add space/location to face detection: if too far from current spot, dump the current name
 # X Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
 # X Add Face Recognition
-# * Add back the random-faces if found-head-count is less than target head count
+# X Add back the random-faces if found-head-count is less than target head count
 # X Remove camera-on-head (relative motion) code
 # X add calibration offset to head
 # XX Only look for heads when not moving??
@@ -59,9 +59,9 @@ enable_randomize_look = False # Look around a little bit for each face
 enable_face_camera = False # Look more straight ahead
 
 
-num_people = 5   # *Maximum* number of "people" to include in the scene
+num_people = 3   # *Maximum* number of "people" to include in the scene
 FACE_DET_TTL = 30  # Hold-time for face detction interruptions (in ticks)
-FACE_NAME_TTL = 30 # Hold-time for a named face (in ticks)
+FACE_NAME_TTL = 20 # Hold-time for a named face (in ticks)
 
 # Calibration to get the head to face you exactly (hopefully)
 HEAD_OFFSET_X = 16
