@@ -50,16 +50,17 @@
 
 # Enable different basic operations
 
-HOME = True    # At Keith's house
+HOME = False   # At Keith's house
 enable_GUI = True
-enable_MC = False # enable Motor Control
+enable_MC = True # enable Motor Control
 enable_face_detect = True
 enable_show_phyz_loc = True
-enable_randomize_look = False # Look around a little bit for each face
-enable_face_camera = False # Look more straight ahead
+enable_randomize_look = True # Look around a little bit for each face
+enable_face_camera = True # Look more straight ahead
 
+likelihood_of_first_face = 30
 
-num_people = 3   # *Maximum* number of "people" to include in the scene
+num_people = 5   # *Maximum* number of "people" to include in the scene
 FACE_DET_TTL = 30  # Hold-time for face detction interruptions (in ticks)
 FACE_NAME_TTL = 20 # Hold-time for a named face (in ticks)
 
@@ -188,7 +189,7 @@ def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0, no
     return image
   
 
-def choose_people_locations(num_people = 5):
+def choose_people_locations(num_people = 5, force_zero =  False):
     """return a list of people, where each pair shows percentage of total range available"""
     #people_list = np.random.randint(-90, 90, (num_people,2))
     people_list = []
@@ -198,6 +199,8 @@ def choose_people_locations(num_people = 5):
         this_x = np.random.randint(10,80) * np.random.choice((-1,1))
         this_y = np.random.randint(-25,25)
         people_list.append([this_x, this_y, []])
+    if force_zero:
+        people_list[0] = [0, 0, []]
         
     return people_list
      
@@ -230,20 +233,20 @@ def set_head_to_nominal():
     servo.setTarget(arm_left_channel, arm_left_range[1])
     servo.setTarget(arm_right_channel, arm_right_range[1])
 
-    #FIXME: tweak these while watching the hw
-    speed=80
-    servo.setSpeed(head_x_channel, speed)
-    servo.setSpeed(head_y_channel, speed//3)
-    servo.setSpeed(head_tilt_channel, speed//4)
-    servo.setSpeed(arm_left_channel, speed)
-    servo.setSpeed(arm_right_channel, speed)
+    # #FIXME: tweak these while watching the hw
+    # speed=80
+    # servo.setSpeed(head_x_channel, speed)
+    # servo.setSpeed(head_y_channel, speed//6)
+    # servo.setSpeed(head_tilt_channel, speed//4)
+    # servo.setSpeed(arm_left_channel, speed)
+    # servo.setSpeed(arm_right_channel, speed)
 
-    accel = 2  #FIXME: tweak this
-    servo.setAccel(head_x_channel, 1*accel)
-    servo.setAccel(head_y_channel, 1*accel)
-    servo.setAccel(head_tilt_channel, accel)
-    servo.setAccel(arm_left_channel, accel)
-    servo.setAccel(arm_right_channel, accel)
+    # accel = 2  #FIXME: tweak this
+    # servo.setAccel(head_x_channel, 5)
+    # servo.setAccel(head_y_channel, 2)
+    # servo.setAccel(head_tilt_channel, 2)
+    # servo.setAccel(arm_left_channel, 2)
+    # servo.setAccel(arm_right_channel, 2)
 
 
 def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, move_relative=False, move_scale=1.0):
@@ -525,27 +528,30 @@ while True:
     if head_duration_count <= 0:
         # Make person 0 most likely
         event_prob = np.random.randint(0,100)
-        if event_prob < 50:   # Look at the main (same) person
+        if event_prob < likelihood_of_first_face:   # Look at the main (same) person
             person_num = 0
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = abs(int(np.random.normal(15,25)))+10  # num of frames to keep looking at this person
+            head_duration_count = abs(int(np.random.normal(5,20)))+5  # num of frames to keep looking at this person
             last_looked_away = False
             phyz_note = ""
             current_face_name = ""
-        elif event_prob < 60 and enable_randomize_look:  # Look away a little
+        elif event_prob < 75 and enable_randomize_look:  # Look away a little
             person_offset_x = np.random.randint(5,10) * np.random.choice((-1,1))
-            person_offset_y = np.random.randint(-5,5)
-            head_duration_count = abs(int(np.random.normal(5,10)))+5  # num of frames to keep looking at this person
+            person_offset_y = np.random.randint(-10,10)
+            head_duration_count = abs(int(np.random.normal(3,5)))+2  # num of frames to keep looking at this person
             last_looked_away = True
             print("Look away: ", person_offset_x, person_offset_y)
             phyz_note = "Glance"
         else:   # Switch person
-            person_num = np.random.randint(0,len(people_list))
+            new_person_num = np.random.randint(0,len(people_list))
+            if new_person_num == person_num:
+                new_person_num = np.random.randint(0,len(people_list))
+            person_num = new_person_num
             print ("Switching person: ", person_num)
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = abs(int(np.random.normal(15,25)))+10  # num of frames to keep looking at this person
+            head_duration_count = abs(int(np.random.normal(3,15)))+5  # num of frames to keep looking at this person
             last_looked_away = False
             phyz_note = ""
             current_face_name = ""
