@@ -108,7 +108,7 @@ head_x_range = (1520*4, 1620*4, 1728*4) # head left/right
 head_y_range = (735*4, 936*4, 1136*4) # head up / down
 #head_tilt_range = (1400*4, 1450*4, 1500*4)   # old.  Not sure why it changed. 
 head_tilt_range = (1237*4, 1337*4, 1437*4) 
-arm_right_range = (1536*4, 2608*4, 2608*4) 
+arm_right_range = (896*4, 2608*4, 2608*4) 
 arm_left_range = (944*4, 2000*4, 2000*4)
         
 
