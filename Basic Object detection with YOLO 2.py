@@ -9,8 +9,8 @@ from ultralytics import YOLO  # Use YOLO from the Ultralytics library
 # Load a pre-trained YOLO model
 # You can specify "yolov5s.pt" or "yolov8s.pt" (small model versions) or other model sizes for different performance
 #model = YOLO("yolov8n.pt")  # 'n' for nano model, fast and lightweight for real-time detection
-#model = YOLO("yolo11n.pt")  # 'n' for nano model, fast and lightweight for real-time detection
-model = YOLO("/Volumes/Safari/PhyzAI_RemoteControl/runs/detect/train2/weights/best.pt")
+model = YOLO("yolo11s.pt")  # 'n' for nano model, fast and lightweight for real-time detection
+#model = YOLO("/Volumes/Safari/PhyzAI_RemoteControl/runs/detect/train2/weights/best.pt")
 
 
 # Open the webcam

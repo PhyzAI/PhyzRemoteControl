@@ -4,6 +4,7 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
+# * Face (and ball) time-to-live needs to be refactored.  Put face detect into its own function.  Wrap TTL around that.
 # * Add space/location to face detection: if too far from current spot, dump the current name
 # X Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
 # X Add Face Recognition
@@ -50,15 +51,16 @@
 
 # Enable different basic operations
 
-HOME = False   # At Keith's house
+HOME = True   # At Keith's house
 enable_GUI = True
-enable_MC = True # enable Motor Control
+enable_MC = False # enable Motor Control
 enable_face_detect = True
+enable_ball_detect=True
 enable_show_phyz_loc = True
-enable_randomize_look = True # Look around a little bit for each face
-enable_face_camera = True # Look more straight ahead
+enable_randomize_look = False # Look around a little bit for each face
+enable_face_camera = False # Look more straight ahead
 
-likelihood_of_first_face = 30
+likelihood_of_first_face = 50
 
 num_people = 5   # *Maximum* number of "people" to include in the scene
 FACE_DET_TTL = 30  # Hold-time for face detction interruptions (in ticks)
@@ -81,6 +83,19 @@ from facenet_pytorch import MTCNN
 #from keras.models import load_model
 #model_path = "./facenet_keras.h5"
 #facenet_model = load_model(model_path)
+
+# Basic YOLO object detection
+import torch
+import cv2
+from ultralytics import YOLO  # Use YOLO from the Ultralytics library
+# Load a pre-trained YOLO model
+# You can specify "yolov5s.pt" or "yolov8s.pt" (small model versions) or other model sizes for different performance
+#model = YOLO("yolov8n.pt")  # 'n' for nano model, fast and lightweight for real-time detection
+model = YOLO("yolo11s.pt")  # 'n' for nano model, fast and lightweight for real-time detection
+#model = YOLO("/Volumes/Safari/PhyzAI_RemoteControl/runs/detect/train2/weights/best.pt")
+
+
+
 
 from keras_facenet import FaceNet
 embedder = FaceNet()
@@ -382,6 +397,35 @@ def preprocess_face(image, target_size=(160, 160)):
 
 
 
+# ball (microphone) detection
+def detect_ball(frame):
+    items = ['apple', 'sports ball']  # FIXME: you can limit what YOLO actually looks forq
+    results = model(frame, verbose=False)
+    #results = model.predict(frame, show=False, boxes=False, classes=False, conf=False)
+
+    for result in results:
+        boxes = result.boxes  # Each detection result has 'boxes', 'conf', and 'class' attributes
+        
+        for box in boxes:
+            x1, y1, x2, y2 = box.xyxy[0].int().tolist()  # Get coordinates
+            conf = box.conf[0].item()  # Confidence score
+            cls = box.cls[0].item()  # Class ID
+
+            this_item = model.names[int(cls)]
+            this_item_conf = conf
+
+            label = f"{model.names[int(cls)]} {conf:.2f}"
+            if this_item in items:
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                ball_x, ball_y = get_pos_from_box([x1,y1,x2,y2])
+                return( ball_x, ball_y )  
+            
+    else:
+        return(None, None)
+
+
+
 
 ############
 ### MAIN ###
@@ -458,7 +502,6 @@ while True:
     ret, frame = cap.read()
     frame = cv2.flip(frame, 1)
 
-
     ### Detect Faces and draw on frame ###
     
     if enable_face_detect:
@@ -519,6 +562,15 @@ while True:
     #     person_num = 0
     #     time_to_live = FACE_DET_TTL
     #     #print("random person: ", this_x, this_y)
+
+    #FIXME: I'm not sure face-detect TTL is working for the microphone/ball
+    # Ball (microphone) detec
+    if enable_ball_detect:
+        ball_loc_x, ball_loc_y = detect_ball(frame)
+        if ball_loc_x is not None:
+            people_list.insert(0,[ball_loc_x, ball_loc_y, []])
+
+
 
     for person_x, person_y, _ in people_list:
         this_x, this_y = get_screen_position((person_x, person_y))
