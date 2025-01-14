@@ -4,7 +4,9 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * Face (and ball) time-to-live needs to be refactored.  Put face detect into its own function.  Wrap TTL around that.
+# * Maybe use YOLO for face (well, person) detection as well???
+# * Face and ball TTL seem to not be working properly.  Generally works, but seems to switch too soon sometimes.
+# X Face (and ball) time-to-live needs to be refactored.  Put face detect into its own function.  Wrap TTL around that.
 # * Add space/location to face detection: if too far from current spot, dump the current name
 # X Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
 # X Add Face Recognition
@@ -55,12 +57,13 @@ HOME = True   # At Keith's house
 enable_GUI = True
 enable_MC = False # enable Motor Control
 enable_face_detect = True
+enable_face_recog = False #FIXME: Not implemented yet
 enable_ball_detect=True
 enable_show_phyz_loc = True
 enable_randomize_look = False # Look around a little bit for each face
 enable_face_camera = False # Look more straight ahead
 
-likelihood_of_first_face = 50
+likelihood_of_first_face = 50 # percent
 
 num_people = 5   # *Maximum* number of "people" to include in the scene
 FACE_DET_TTL = 30  # Hold-time for face detction interruptions (in ticks)
@@ -76,13 +79,12 @@ import cv2
 import numpy as np
 import face_recognition
 import time
-#if enable_face_detect:
 from facenet_pytorch import MTCNN
-#import tensorflow as tf
-##from tensorflow.keras.models import load_model
-#from keras.models import load_model
-#model_path = "./facenet_keras.h5"
-#facenet_model = load_model(model_path)
+
+import os
+import glob
+import re
+
 
 # Basic YOLO object detection
 import torch
@@ -95,10 +97,9 @@ model = YOLO("yolo11s.pt")  # 'n' for nano model, fast and lightweight for real-
 #model = YOLO("/Volumes/Safari/PhyzAI_RemoteControl/runs/detect/train2/weights/best.pt")
 
 
-
-
 from keras_facenet import FaceNet
 embedder = FaceNet()
+
 
 # FIXME: Choose correct com-port and device
 if enable_MC:
@@ -206,16 +207,14 @@ def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0, no
 
 def choose_people_locations(num_people = 5, force_zero =  False):
     """return a list of people, where each pair shows percentage of total range available"""
-    #people_list = np.random.randint(-90, 90, (num_people,2))
     people_list = []
     for i in range(num_people):
-        #people_list = [[0,0]]
         this_x = np.random.randint(-80,80)
         this_x = np.random.randint(10,80) * np.random.choice((-1,1))
         this_y = np.random.randint(-25,25)
-        people_list.append([this_x, this_y, []])
+        people_list.append([this_x, this_y, [], "", 0])
     if force_zero:
-        people_list[0] = [0, 0, []]
+        people_list[0] = [0, 0, [], "", 0]
         
     return people_list
      
@@ -224,12 +223,6 @@ def get_screen_position(person_loc = [0,0], move_scale = 1.0):
     """ Translate Ideal person location to point on the screen """
     x_pos = person_loc[0]
     y_pos = person_loc[1]
-
-    #x_scale = int(0.8*image_size_x / 2)
-    #y_scale = image_size_y // 2 // 2  # don't look too much up or down
-
-    #x_pos = int(image_size_x/2 + x_loc*x_scale/100)
-    #y_pos = int(image_size_y/2 + y_loc*y_scale/100)
 
     x_box_mid = int(move_scale * image_size_x*(x_pos + 100)/200)
     y_box_mid = int(move_scale * image_size_y*(y_pos + 100)/200)
@@ -247,21 +240,6 @@ def set_head_to_nominal():
     servo.setTarget(head_tilt_channel, head_tilt_range[1])
     servo.setTarget(arm_left_channel, arm_left_range[1])
     servo.setTarget(arm_right_channel, arm_right_range[1])
-
-    # #FIXME: tweak these while watching the hw
-    # speed=80
-    # servo.setSpeed(head_x_channel, speed)
-    # servo.setSpeed(head_y_channel, speed//6)
-    # servo.setSpeed(head_tilt_channel, speed//4)
-    # servo.setSpeed(arm_left_channel, speed)
-    # servo.setSpeed(arm_right_channel, speed)
-
-    # accel = 2  #FIXME: tweak this
-    # servo.setAccel(head_x_channel, 5)
-    # servo.setAccel(head_y_channel, 2)
-    # servo.setAccel(head_tilt_channel, 2)
-    # servo.setAccel(arm_left_channel, 2)
-    # servo.setAccel(arm_right_channel, 2)
 
 
 def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, move_relative=False, move_scale=1.0):
@@ -306,10 +284,10 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, m
 
     return
 
-import os
-import glob
-import re
 
+##################
+# More Functions #
+##################
 
 def get_pos_from_box(box):
     x_box_mid = int((box[0]+box[2])/2)
@@ -395,11 +373,9 @@ def preprocess_face(image, target_size=(160, 160)):
     return face
 
 
-
-
-# ball (microphone) detection
+# Ball (microphone) detection
 def detect_ball(frame):
-    items = ['apple', 'sports ball']  # FIXME: you can limit what YOLO actually looks forq
+    items = ['apple', 'sports ball',] # 'person']  # FIXME: you can limit what YOLO actually looks for
     results = model(frame, verbose=False)
     #results = model.predict(frame, show=False, boxes=False, classes=False, conf=False)
 
@@ -423,6 +399,44 @@ def detect_ball(frame):
             
     else:
         return(None, None)
+
+
+def detect_faces(frame, PROB_THRESH = 0.90):
+    face_list = []
+    boxes, probs = mtcnn.detect(frame, landmarks=False)
+
+    if boxes is not None:
+        for box, prob in zip(boxes, probs): 
+            if prob > PROB_THRESH:
+                try:
+                    # Set up region to look for known faces
+                    face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+
+                    ycrcb = cv2.cvtColor(face_region, cv2.COLOR_BGR2YCrCb)
+
+                    # Equalize the Y channel
+                    ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0])
+
+                    # Convert back to BGR
+                    face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+
+                    cv2.imshow('face_region', face_region) 
+                    cv2.moveWindow("face_region", 40,30)
+
+                    pos_x, pos_y = get_pos_from_box(box)
+                    face_list.append((pos_x, pos_y, face_region, "unk", 0))                
+                except:
+                    pass
+    return face_list
+                
+
+def detect_known_faces(face_list):
+    # FIXME: this is a placeholder
+    known_face_list = []
+    for pos_x, pos_y, _, _, _ in face_list:
+        known_face_list.append((pos_x, pos_y, [], "unk", 0)) # x, y, region, name, ttl
+    return known_face_list
+
 
 
 
@@ -466,7 +480,8 @@ right_arm = 0
 
 
 # Set head servos to nominal
-if enable_MC: set_head_to_nominal
+if enable_MC: set_head_to_nominal()
+
 
 # Initialize stuff
 person_num = 0
@@ -486,7 +501,7 @@ known_face_y = 9999
 if num_people > 0:
     random_people_list = choose_people_locations(num_people) 
     if enable_face_camera:
-        random_people_list[0] = [0, 0, []]
+        random_people_list[0] = [0, 0, [], "", 0]  # Force 1st person to be face-on
 else:
     random_people_list = []
 
@@ -502,89 +517,46 @@ while True:
     ret, frame = cap.read()
     frame = cv2.flip(frame, 1)
 
-    ### Detect Faces and draw on frame ###
-    
     if enable_face_detect:
-        boxes, probs = mtcnn.detect(frame, landmarks=False)
-        #draw_face_boxes(frame, boxes, probs) #, landmarks)
-    else:
-        boxes = None
+        new_people_list = detect_faces(frame)
 
-    if (boxes is None) and (time_to_live > 0):  # No face detected, but just keep to old state
-        time_to_live -= 1
-    elif (boxes is None) and (time_to_live <= 0):
+    if enable_ball_detect: # Ball / microphone detect
+        ball_loc_x, ball_loc_y = detect_ball(frame)
+        if ball_loc_x is not None:
+            new_people_list.insert(0,[ball_loc_x, ball_loc_y, [], "mic", 0])
+
+    # Keep old locations if ttl hasn't expired
+    # FIXME: this isn't quite right.  Is this the source of the hop-to-new-face problem?
+    if (len(new_people_list) == 0) and (time_to_live > 0):
+         time_to_live -= 1
+    elif (len(new_people_list) == 0) and (time_to_live <= 0):
         people_list = []
-        #person_num = 0
     else:
-        time_to_live = FACE_DET_TTL  # number of frames to ignore if no people detected
-        people_list = []
-        #person_num = 0
-        for box, prob in zip(boxes, probs): 
-            if prob > 0.90:
-
-                try:
-                    # Look for known faces
-                    face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
-                    #face_region = cv2.cvtColor(face_region, cv2.COLOR_BGR2RGB)
-
-                    ycrcb = cv2.cvtColor(face_region, cv2.COLOR_BGR2YCrCb)
-
-                    # Equalize the Y channel
-                    ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0])
-
-                    # Convert back to BGR
-                    face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
-
-                    cv2.imshow('face_region', face_region) 
-                    cv2.moveWindow("face_region", 40,30)
-
-                    pos_x, pos_y = get_pos_from_box(box)
-                except:
-                    pos_x = 0
-                    pos_y = 0
-                    face_region = []
-                people_list.append((pos_x, pos_y, face_region))                
+        people_list = new_people_list
+        time_to_live = FACE_DET_TTL
 
 
 
     ### Choose select faces or do random if none found ###            
-
     if len(people_list) < num_people:
         delta = num_people - len(people_list)
         people_list.extend(random_people_list[:delta])
     elif len(people_list) > num_people:
         people_list = people_list[:num_people]
-    # elif len(people_list) == 0:
-    #     #people_list = [[0,0]]
-    #     this_x = int(np.random.normal(0, 20)) # np.random.randint(-30,30)
-    #     this_y = int(np.random.normal(0, 10)) #np.random.randint(-25,25)
-    #     people_list = [[this_x, this_y, []]]
-    #     person_num = 0
-    #     time_to_live = FACE_DET_TTL
-    #     #print("random person: ", this_x, this_y)
+    
 
-    #FIXME: I'm not sure face-detect TTL is working for the microphone/ball
-    # Ball (microphone) detec
-    if enable_ball_detect:
-        ball_loc_x, ball_loc_y = detect_ball(frame)
-        if ball_loc_x is not None:
-            people_list.insert(0,[ball_loc_x, ball_loc_y, []])
-
-
-
-    for person_x, person_y, _ in people_list:
+    for person_x, person_y, _, person_name, _ in people_list:
         this_x, this_y = get_screen_position((person_x, person_y))
-        draw_person_loc(frame, this_x, this_y, "")
+        draw_person_loc(frame, this_x, this_y, person_name)
 
     # Look at one person, or switch
     if head_duration_count <= 0:
-        # Make person 0 most likely
         event_prob = np.random.randint(0,100)
         if event_prob < likelihood_of_first_face:   # Look at the main (same) person
             person_num = 0
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = abs(int(np.random.normal(5,20)))+5  # num of frames to keep looking at this person
+            head_duration_count = abs(int(np.random.normal(1,20)))+7  # num of frames to keep looking at this person
             last_looked_away = False
             phyz_note = ""
             current_face_name = ""
@@ -629,7 +601,7 @@ while True:
         body_duration_count -= 1
     
     
-    person_x, person_y, person_face_region = people_list[person_num]
+    person_x, person_y, person_face_region, _, _ = people_list[person_num]
     # only check for known_face of person actually being looked at
     if (current_face_name == "") and (len(person_face_region) > 0):
         face_name = check_region_for_known_face(person_face_region, 0.6, known_faces)
@@ -638,7 +610,7 @@ while True:
             print("Found a known face: ", face_name)
     this_x, this_y = get_screen_position((person_x, person_y))
     
-    # FIXME: Did this get rid of "hanging on to know face too long" problem???
+    # FIXME: Did this get rid of "hanging on to known face too long" problem???
     #if calc_face_dist(this_x, this_y, known_face_x, known_face_y) > 10:
     #    current_face_name = ""
     #known_face_x = this_x
