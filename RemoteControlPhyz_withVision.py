@@ -218,8 +218,8 @@ def choose_people_locations(num_people = 5, force_zero =  False):
     """return a list of people, where each pair shows percentage of total range available"""
     people_list = []
     for i in range(num_people):
-        this_x = np.random.randint(-80,80)
-        this_x = np.random.randint(10,80) * np.random.choice((-1,1))
+        #this_x = np.random.randint(-70,70)
+        this_x = np.random.randint(20,80) * np.random.choice((-1,1))
         this_y = np.random.randint(-25,25)
         new_person = Person(this_x, this_y, [], "", 0)
         people_list.append(new_person)
@@ -503,14 +503,12 @@ known_face_y = 9999
 
 
 if num_people > 0:
-    random_people_list = choose_people_locations(num_people) 
-    if enable_face_camera:
-        random_people_list[0] = Person(0, 0)  # Force 1st person to be face-on
+    random_people_list = choose_people_locations(num_people, enable_face_camera) 
 else:
     random_people_list = []
 
 
-people_list = random_people_list
+people_list = random_people_list.copy()
 
 
 ### Main Loop ###
@@ -521,6 +519,8 @@ while True:
 
     # Read the frame from the webcam
     ret, frame = cap.read()
+    if not ret:
+        continue
     frame = cv2.flip(frame, 1)
 
     if enable_face_detect:
@@ -532,12 +532,13 @@ while True:
             new_people_list.insert(0,Person(ball_loc_x, ball_loc_y, name="mic"))
 
 
-    # Decrement time-to-live for each person
+    # Decrement time-to-live for each person, go back to random if timed-out
     for i in range(len(people_list)):
         if people_list[i].time_to_live > 0: 
             people_list[i].time_to_live = people_list[i].time_to_live - 1
         else:
-            people_list[i].name = ""
+            #people_list[i].name = ""
+            people_list[i] = random_people_list[i]
 
 
     # Choose to keep a face or not, as they time-out
@@ -555,6 +556,7 @@ while True:
             people_list[i].y_pos = new_people_list[i].y_pos
         else:
             people_list[i] = random_people_list[i]
+            #assert False  # Should never get here # FIXME: but it does!!!!
  
 
     
