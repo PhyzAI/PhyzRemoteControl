@@ -54,11 +54,11 @@
 
 # Enable different basic operations
 
-HOME = True   # At Keith's house
+HOME = False   # At Keith's house
 enable_GUI = True
-enable_MC = False # enable Motor Control
+enable_MC = True # enable Motor Control
 enable_face_detect = True
-enable_face_recog = False
+enable_face_recog = True
 enable_ball_detect=True
 enable_show_phyz_loc = True
 enable_randomize_look = False # Look around a little bit for each face
@@ -67,10 +67,11 @@ enable_face_camera = False # Look more straight ahead
 likelihood_of_first_face = 30 # percent
 
 num_people = 5   # Number of "people" to include in the scene
-max_real_people = 5
+max_real_people = 3
 assert max_real_people <= num_people
 
-FACE_DET_TTL = 20  # Hold-time for face detection (in ticks)
+FACE_DET_TTL = 45  # Hold-time for face detection (in ticks)
+RANDOM_FACE_TTL = 90
 
 # Calibration to get the head to face you exactly (hopefully)
 HEAD_OFFSET_X = 16
@@ -218,20 +219,23 @@ def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0, no
     return image
   
 
-def choose_people_locations(num_people = 5, force_zero =  False):
+def choose_people_locations(num_people = 5, force_zero =  True):
     """return a list of people, where each pair shows percentage of total range available"""
     people_list = []
     for i in range(num_people):
-        #this_x = np.random.randint(-70,70)
-        this_x = np.random.randint(20,80) * np.random.choice((-1,1))
-        this_y = np.random.randint(-25,25)
-        new_person = Person(this_x, this_y, [], "", 0)
-        people_list.append(new_person)
-    if force_zero:
-        people_list[0] = Person(0, 0, [], "", 0)
-        
+        people_list.append(choose_person_location(i, force_zero))
     return people_list
      
+def choose_person_location(location, force_zero =  True):
+    """return a person"""
+    side = 2*(location % 2) - 1  # -1 or +1
+    this_x = np.random.randint(20,80) * side
+    this_y = np.random.randint(-25,25)
+    if force_zero and location == 0:
+        new_person = Person(0,0, [], "", RANDOM_FACE_TTL)
+    else:
+        new_person = Person(this_x, this_y, [], "", RANDOM_FACE_TTL)
+    return new_person
 
 def get_screen_position(person_loc = [0,0], move_scale = 1.0):
     """ Translate Ideal person location to point on the screen """
@@ -510,6 +514,7 @@ ave_face_dist = 3  # How much the faces are moving, on average
 assert num_people > 0
 random_people_list = choose_people_locations(num_people, enable_face_camera) 
 people_list = random_people_list.copy()  # Initially, all people are random
+new_people_list = []
 
 
 ### Main Loop ###
@@ -533,25 +538,24 @@ while True:
             new_people_list.insert(0,Person(ball_loc_x, ball_loc_y, name="mic"))
 
 
-    # Decrement time-to-live for each person, go back to random if timed-out
+    # Decrement time-to-live for each person, choose random if timed-out
     for i in range(len(people_list)):
         if people_list[i].time_to_live > 0: 
             people_list[i].time_to_live = people_list[i].time_to_live - 1
         else:
-            #people_list[i].name = ""
-            people_list[i] = random_people_list[i]
-
+            people_list[i] = choose_person_location(i, enable_face_camera)  # Choose a new random person
+            
 
     
     # Choose to keep a face or not, as they time-out
     for i in range(len(new_people_list)-1, -1, -1):  # Go thru backwards
         # Check distance from new people to existing people
         new_face_dist = calc_person_face_dist(people_list[i], new_people_list[i])
-        if (new_face_dist > 0) and (new_face_dist < 20):  # Only include non-random faces, ie faces that move, but not newly selected faces
-            ave_face_dist = round((10*ave_face_dist + new_face_dist) / 11, 1) + 1  # FIXME: Tweak these parameters
+        if (new_face_dist > 0):  # Only include non-random faces, ie faces that move, but not newly selected faces
+            ave_face_dist = max((5*ave_face_dist + new_face_dist) / 6, 1) # FIXME: Tweak these parameters
         #print("New Face Dist, ave: ", new_face_dist, ave_face_dist)
 
-        if new_face_dist > 15: # was 7 # FIXME: what should this be???  Also, if a face is moving, should Phyz focus there?
+        if new_face_dist > 25: # was 7 # FIXME: what should this be???  Also, if a face is moving, should Phyz focus there?
             people_list[i] = new_people_list[i]
             people_list[i].time_to_live = FACE_DET_TTL
             people_list[i].name = ""
@@ -559,20 +563,13 @@ while True:
             people_list[i].x_pos = new_people_list[i].x_pos
             people_list[i].y_pos = new_people_list[i].y_pos
         else:
-            people_list[i] = random_people_list[i]
-            #assert False  # Should never get here # FIXME: but it does!!!!
+            people_list[i] = choose_person_location(i, enable_face_camera)  # Choose a new random person
+            
  
-        if (new_face_dist > 10): #FIXME: Average not working well  #4.0*ave_face_dist):  # Face is moving, focus there (for 1st moving face)
+        if (new_face_dist > 2*ave_face_dist): #FIXME: Average not working well  #4.0*ave_face_dist):  # Face is moving, focus there (for 1st moving face)
             print("Found moving", person_num, i)
             person_num = i
             
-
-    # # Select (moving) new person
-    # if (new_person_num > 0):
-    #     person_num = new_person_num
-    #     print("Switching Moving:", new_person_num)
-
-
 
     # Recognize known faces
 
@@ -611,11 +608,11 @@ while True:
             print("Look away: ", person_offset_x, person_offset_y)
             phyz_note = "Glance"
         else:   # Switch person
-            new_person_num = np.random.randint(0,len(people_list))
-            if new_person_num == person_num:
+            new_person_num = person_num
+            while new_person_num == person_num:
                 new_person_num = np.random.randint(0,len(people_list))
+            print ("Switching person: ", person_num, new_person_num)
             person_num = new_person_num
-            print ("Switching person: ", person_num)
             person_offset_x = 0
             person_offset_y = 0
             head_duration_count = abs(int(np.random.normal(3,15)))+5  # num of frames to keep looking at this person
