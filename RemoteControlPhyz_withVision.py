@@ -4,8 +4,9 @@
 # Initial Rev, RKD 2024-08
 #
 # TODO:
-# * Maybe use YOLO for face (well, person) detection as well???
-# * Face and ball TTL seem to not be working properly.  Generally works, but seems to switch too soon sometimes.
+# * Prevent switching back to same face.  Always choose a new one.
+# XX Maybe use YOLO for face (well, person) detection as well???
+# X Face and ball TTL seem to not be working properly.  Generally works, but seems to switch too soon sometimes.
 # X Face (and ball) time-to-live needs to be refactored.  Put face detect into its own function.  Wrap TTL around that.
 # * Add space/location to face detection: if too far from current spot, dump the current name
 # X Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
@@ -57,15 +58,18 @@ HOME = True   # At Keith's house
 enable_GUI = True
 enable_MC = False # enable Motor Control
 enable_face_detect = True
-enable_face_recog = True
+enable_face_recog = False
 enable_ball_detect=True
 enable_show_phyz_loc = True
 enable_randomize_look = False # Look around a little bit for each face
 enable_face_camera = False # Look more straight ahead
 
-likelihood_of_first_face = 50 # percent
+likelihood_of_first_face = 30 # percent
 
-num_people = 5   # *Maximum* number of "people" to include in the scene
+num_people = 5   # Number of "people" to include in the scene
+max_real_people = 5
+assert max_real_people <= num_people
+
 FACE_DET_TTL = 20  # Hold-time for face detection (in ticks)
 
 # Calibration to get the head to face you exactly (hopefully)
@@ -350,7 +354,7 @@ def calculate_distance(embedding1, embedding2):
 def check_for_face(target_encoding, threshold, known_faces):
     for face_name, face_encoding in known_faces:
         dist = calculate_distance(target_encoding, face_encoding)
-        print("face_name, dist: ", face_name, dist)
+        # print("face_name, dist: ", face_name, dist)
         if dist <= threshold:
             return face_name
     return ("")
@@ -501,14 +505,11 @@ current_face_name = ""
 known_face_x = 9999
 known_face_y = 9999
 
+ave_face_dist = 3  # How much the faces are moving, on average
 
-if num_people > 0:
-    random_people_list = choose_people_locations(num_people, enable_face_camera) 
-else:
-    random_people_list = []
-
-
-people_list = random_people_list.copy()
+assert num_people > 0
+random_people_list = choose_people_locations(num_people, enable_face_camera) 
+people_list = random_people_list.copy()  # Initially, all people are random
 
 
 ### Main Loop ###
@@ -541,25 +542,38 @@ while True:
             people_list[i] = random_people_list[i]
 
 
+    
     # Choose to keep a face or not, as they time-out
-    for i in range(len(new_people_list)):
+    for i in range(len(new_people_list)-1, -1, -1):  # Go thru backwards
         # Check distance from new people to existing people
         new_face_dist = calc_person_face_dist(people_list[i], new_people_list[i])
-        print("New Face Dist:", new_face_dist)
+        if (new_face_dist > 0) and (new_face_dist < 20):  # Only include non-random faces, ie faces that move, but not newly selected faces
+            ave_face_dist = round((10*ave_face_dist + new_face_dist) / 11, 1) + 1  # FIXME: Tweak these parameters
+        #print("New Face Dist, ave: ", new_face_dist, ave_face_dist)
 
-        if new_face_dist > 7:  # FIXME: what should this be???  Also, if a face is moving, should Phyz focus there?
+        if new_face_dist > 15: # was 7 # FIXME: what should this be???  Also, if a face is moving, should Phyz focus there?
             people_list[i] = new_people_list[i]
             people_list[i].time_to_live = FACE_DET_TTL
             people_list[i].name = ""
-        elif (new_face_dist <= 5) and (people_list[i].time_to_live > 0):
+        elif (new_face_dist <= 5) and (people_list[i].time_to_live > 0):  # was 5
             people_list[i].x_pos = new_people_list[i].x_pos
             people_list[i].y_pos = new_people_list[i].y_pos
         else:
             people_list[i] = random_people_list[i]
             #assert False  # Should never get here # FIXME: but it does!!!!
  
+        if (new_face_dist > 10): #FIXME: Average not working well  #4.0*ave_face_dist):  # Face is moving, focus there (for 1st moving face)
+            print("Found moving", person_num, i)
+            person_num = i
+            
 
-    
+    # # Select (moving) new person
+    # if (new_person_num > 0):
+    #     person_num = new_person_num
+    #     print("Switching Moving:", new_person_num)
+
+
+
     # Recognize known faces
 
     if enable_face_recog:
