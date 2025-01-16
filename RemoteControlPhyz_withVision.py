@@ -58,20 +58,20 @@ HOME = False   # At Keith's house
 enable_GUI = True
 enable_MC = True # enable Motor Control
 enable_face_detect = True
-enable_face_recog = True
+enable_face_recog = False
 enable_ball_detect=True
 enable_show_phyz_loc = True
 enable_randomize_look = False # Look around a little bit for each face
-enable_face_camera = False # Look more straight ahead
+enable_face_camera = True # Look more straight ahead
 
-likelihood_of_first_face = 30 # percent
+likelihood_of_first_face = 40 # percent
 
 num_people = 5   # Number of "people" to include in the scene
 max_real_people = 3
 assert max_real_people <= num_people
 
 FACE_DET_TTL = 45  # Hold-time for face detection (in ticks)
-RANDOM_FACE_TTL = 90
+RANDOM_FACE_TTL = 80
 
 # Calibration to get the head to face you exactly (hopefully)
 HEAD_OFFSET_X = 16
@@ -566,7 +566,7 @@ while True:
             people_list[i] = choose_person_location(i, enable_face_camera)  # Choose a new random person
             
  
-        if (new_face_dist > 2*ave_face_dist): #FIXME: Average not working well  #4.0*ave_face_dist):  # Face is moving, focus there (for 1st moving face)
+        if (new_face_dist > 1.2*ave_face_dist): #FIXME: Average not working well  #4.0*ave_face_dist):  # Face is moving, focus there (for 1st moving face)
             print("Found moving", person_num, i)
             person_num = i
             
@@ -627,7 +627,7 @@ while True:
 
     if body_duration_count <= 0:  # Time for a new position
         head_angle = int(np.random.normal(0, 10))
-        if np.random.randint(0,100) < 3: # hands up
+        if np.random.randint(0,100) < 5: # hands up
             arm_left_axis = 0
             arm_right_axis = 1
         else:
