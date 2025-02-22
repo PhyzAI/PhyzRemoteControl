@@ -66,7 +66,7 @@ enable_face_camera = True # Look more straight ahead
 
 likelihood_of_first_face = 40 # percent
 
-num_people = 5   # Number of "people" to include in the scene
+num_people = 7   # Number of "people" to include in the scene
 max_real_people = 3
 assert max_real_people <= num_people
 
@@ -74,7 +74,7 @@ FACE_DET_TTL = 45  # Hold-time for face detection (in ticks)
 RANDOM_FACE_TTL = 80
 
 # Calibration to get the head to face you exactly (hopefully)
-HEAD_OFFSET_X = 16
+HEAD_OFFSET_X = 0
 HEAD_OFFSET_Y = 0
 
 
