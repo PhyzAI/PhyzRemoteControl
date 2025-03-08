@@ -63,15 +63,16 @@ enable_ball_detect=True
 enable_show_phyz_loc = True
 enable_randomize_look = False # Look around a little bit for each face
 enable_face_camera = True # Look more straight ahead
+enable_motion_detect = False
 
-likelihood_of_first_face = 60 # percent
+likelihood_of_first_face = 50 # percent
 
-num_people = 9   # Number of "people" to include in the scene
-max_real_people = 4
+num_people = 7   # Number of "people" to include in the scene
+max_real_people = 3
 assert max_real_people <= num_people
 
-FACE_DET_TTL = 75 # was 45 # Hold-time for face detection (in ticks)
-RANDOM_FACE_TTL = 120 # was 80
+FACE_DET_TTL = 45 # was 45 # Hold-time for face detection (in ticks)
+RANDOM_FACE_TTL = 80 # was 80
 
 # Calibration to get the head to face you exactly (hopefully)
 HEAD_OFFSET_X = 0
@@ -545,10 +546,10 @@ while True:
         else:
             people_list[i] = choose_person_location(i, enable_face_camera)  # Choose a new random person
             
-    max_list = min(len(new_people_list), len(people_list))
-    
+
+
     # Choose to keep a face or not, as they time-out
-    #for i in range(len(new_people_list)-1, -1, -1):  # Go thru backwards
+    max_list = min(len(new_people_list), len(people_list))   #FIXME: Check this
     for i in range(max_list-1, -1, -1):  # Go thru backwards
         # Check distance from new people to existing people
         new_face_dist = calc_person_face_dist(people_list[i], new_people_list[i])
@@ -556,11 +557,7 @@ while True:
             ave_face_dist = max((5*ave_face_dist + new_face_dist) / 6, 1) # FIXME: Tweak these parameters
         #print("New Face Dist, ave: ", new_face_dist, ave_face_dist)
 
-        #FIXME: i index keeps going out of range?
-        #new_face_dist = 1
-        #ave_face_dist = 1
-
-        if new_face_dist > 25: # was 7 # FIXME: what should this be???  Also, if a face is moving, should Phyz focus there?
+        if new_face_dist > 25: # was 7 # FIXME: what should this be???
             people_list[i] = new_people_list[i]
             people_list[i].time_to_live = FACE_DET_TTL
             people_list[i].name = ""
@@ -571,10 +568,10 @@ while True:
             people_list[i] = choose_person_location(i, enable_face_camera)  # Choose a new random person
             
     
-        #if (new_face_dist > 1.2*ave_face_dist): #FIXME: Average not working well  #4.0*ave_face_dist):  # Face is moving, focus there (for 1st moving face)
-        #    time.sleep(0.25)
-        #    print("Found moving", person_num, i)
-        #    person_num = i
+        if enable_motion_detect and (new_face_dist > 1.2*ave_face_dist): #FIXME: Average not working well  #4.0*ave_face_dist):  # Face is moving, focus there (for 1st moving face)
+            time.sleep(0.25)
+            print("Found moving", person_num, i)
+            person_num = i
             
 
     # Recognize known faces
