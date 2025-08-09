@@ -55,9 +55,9 @@
 # Enable different basic operations
 
 HOME = False   # At Keith's house
-enable_GUI = False
+enable_GUI = True
 enable_MC = True # enable Motor Control
-enable_face_detect = True
+enable_face_detect = False
 enable_face_recog = False
 enable_ball_detect=True
 enable_show_phyz_loc = True
@@ -82,7 +82,6 @@ HEAD_OFFSET_Y = 0
 import pygame
 import cv2 
 import numpy as np
-import face_recognition
 import time
 from facenet_pytorch import MTCNN
 

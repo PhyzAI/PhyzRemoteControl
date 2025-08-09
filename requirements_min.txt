@@ -1,0 +1,9 @@
+pygame
+opencv-python
+numpy
+facenet_pytorch
+torch
+ultralytics
+keras_facenet
+pyserial
+tensorflow
