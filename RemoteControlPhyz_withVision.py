@@ -1,27 +1,25 @@
 # PhyzAI remote control, with face detection
-# Alternate version with head-mounted camera
 #
 # Initial Rev, RKD 2024-08
 #
+# NOTE: Make sure you use a virtual environment, not the system python install
+#
+#
 # TODO:
+# * Once a named-face is detected, it should stay with that person for a while (ttl)
 # * Prevent switching back to same face.  Always choose a new one.
-# XX Maybe use YOLO for face (well, person) detection as well???
+# * Add space/location to face detection: if too far from current spot, dump the current name
+# XX Maybe use YOLO for face (well, person) detection as well???  Nope, only does "person", not "face"
 # X Face and ball TTL seem to not be working properly.  Generally works, but seems to switch too soon sometimes.
 # X Face (and ball) time-to-live needs to be refactored.  Put face detect into its own function.  Wrap TTL around that.
-# * Add space/location to face detection: if too far from current spot, dump the current name
 # X Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
 # X Add Face Recognition
 # X Add back the random-faces if found-head-count is less than target head count
 # X Remove camera-on-head (relative motion) code
 # X add calibration offset to head
-# XX Only look for heads when not moving??
-# XX Debug: Keep track of head location in Phyz_control_space when camera is head-mounted.
-#       This isn't working properly.  The motion of the head messes up face detection.
 # X Add some random head moves, and looking around if no face is detected
 # X Tweak calibration of Phyz head versus image center
-# XX add second camera to Phyz's head?  Easier to track exact location of people (closed loop)
-# X Make 1st camera wider angle of view.  S/W fix?
-# X Tracked location (red box  of a real face) does not exactly match circle drawn (green) 
+# X Tracked location (red box of a real face) does not exactly match circle drawn (green) 
 # X Pose changes should happen with a different cadence than changing people
 # X Phyz should track a real persons slight movements
 # X Add camera
@@ -30,11 +28,14 @@
 
 
 
-# Libraries to install
-# - pip install pygame
-# - pip install opencv-python
-# - pip install numpy   # for the display
-# - put zmaestro.py in same directory as this file
+# Libraries to install (in a Conda or Virtual Environment)
+#   pip3 install ultralytics
+#   pip install pygame
+#   pip install tensorflow
+#   pip install keras-facenet
+#   pip install opencv-python # Comes in with ultralytics???
+#   pip install numpy   # for the display. # Comes in with ultralytics???
+#   put zmaestro.py in same directory as this file
 
 # Also install the Maestro driver and control
 # - https://www.pololu.com/file/0J266/maestro-windows-130422.zip
@@ -54,25 +55,26 @@
 
 # Enable different basic operations
 
-HOME = False   # At Keith's house
+HOME = True   # At Keith's house
 enable_GUI = True
-enable_MC = True # enable Motor Control
-enable_face_detect = False
-enable_face_recog = False
-enable_ball_detect=True
+enable_MC = False # enable Motor Control
+enable_face_detect = True
+enable_face_recog = True
+enable_ball_detect= False
 enable_show_phyz_loc = True
 enable_randomize_look = False # Look around a little bit for each face
 enable_face_camera = True # Look more straight ahead
 enable_motion_detect = False
+DEBUG_YOLO = False # Show everything YOLO detects
 
 likelihood_of_first_face = 50 # percent
 
-num_people = 7   # Number of "people" to include in the scene
-max_real_people = 3
+num_people = 3   # Number of "people" to include in the scene
+max_real_people = 2
 assert max_real_people <= num_people
 
 FACE_DET_TTL = 45 # was 45 # Hold-time for face detection (in ticks)
-RANDOM_FACE_TTL = 80 # was 80
+RANDOM_FACE_TTL = 30 # was 80
 
 # Calibration to get the head to face you exactly (hopefully)
 HEAD_OFFSET_X = 0
@@ -82,19 +84,13 @@ HEAD_OFFSET_Y = 0
 import pygame
 import cv2 
 import numpy as np
-import time
-from facenet_pytorch import MTCNN
-
 import os
-import glob
 import re
 import math
 
 
-# Basic YOLO object detection
-import torch
-import cv2
-from ultralytics import YOLO  # Use YOLO from the Ultralytics library
+ # for Object detection (the green ball attached to the microphone)
+from ultralytics import YOLO 
 # Load a pre-trained YOLO model
 # You can specify "yolov5s.pt" or "yolov8s.pt" (small model versions) or other model sizes for different performance
 #model = YOLO("yolov8n.pt")  # 'n' for nano model, fast and lightweight for real-time detection
@@ -102,11 +98,18 @@ model = YOLO("yolo11s.pt")  # 'n' for nano model, fast and lightweight for real-
 #model = YOLO("/Volumes/Safari/PhyzAI_RemoteControl/runs/detect/train2/weights/best.pt")
 
 
+# for Face Detection (not Facial Recognition / Identification)
+from mtcnn import MTCNN
+from mtcnn.utils.images import load_image
+from mtcnn.utils.plotting import plot
+
+
+# for Face Recognition (instead of just Face Detection)
 from keras_facenet import FaceNet
 embedder = FaceNet()
 
 
-# FIXME: Choose correct com-port and device
+# Choose correct com-port and device
 if enable_MC:
     import zmaestro as maestro
     if HOME:
@@ -124,10 +127,10 @@ head_tilt_channel = 2
 arm_left_channel = 4
 arm_right_channel = 3
 
-# Get these from real PhyzAI Maestro board
+# Get these from real PhyzAI Maestro board.  The *4 is because Maestro Control Center and the interface
+# code define the ranges at a different scale
 head_x_range = (1520*4, 1620*4, 1728*4) # head left/right
 head_y_range = (735*4, 936*4, 1136*4) # head up / down
-#head_tilt_range = (1400*4, 1450*4, 1500*4)   # old.  Not sure why it changed. 
 head_tilt_range = (1237*4, 1337*4, 1437*4) 
 arm_right_range = (896*4, 2608*4, 2608*4) 
 arm_left_range = (944*4, 2000*4, 2000*4)
@@ -232,9 +235,9 @@ def choose_person_location(location, force_zero =  True):
     this_x = np.random.randint(20,80) * side
     this_y = np.random.randint(-25,25)
     if force_zero and location == 0:
-        new_person = Person(0,0, [], "", RANDOM_FACE_TTL)
+        new_person = Person(0,0, [], "<random>", RANDOM_FACE_TTL)
     else:
-        new_person = Person(this_x, this_y, [], "", RANDOM_FACE_TTL)
+        new_person = Person(this_x, this_y, [], "<random>", RANDOM_FACE_TTL)
     return new_person
 
 def get_screen_position(person_loc = [0,0], move_scale = 1.0):
@@ -308,6 +311,8 @@ def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, m
 ##################
 
 def get_pos_from_box(box):
+    # Pos is defined in a (-100, 100), (-100, 100) dimensionless space, just for phyz
+    # Box is defined (from cv2) as (minx, miny, maxx, maxy)
     x_box_mid = int((box[0]+box[2])/2)
     y_box_mid = int((box[1]+box[3])/2)
     x_pos = (x_box_mid/image_size_x) * 200 - 100
@@ -332,7 +337,7 @@ def generate_encodings_from_dir(directory):
                 continue
 
             #target = face_recognition.face_locations(target_image)
-            this_face_encodings = embedder.extract(target_image, threshold=0.90) # face_region  
+            this_face_encodings = embedder.extract(target_image) #, threshold=0.90) # face_region  
             if this_face_encodings:
                 this_face_encoding = this_face_encodings[0]['embedding']
             # Use a regular expression to match the alphabetic part of the filename
@@ -344,11 +349,11 @@ def generate_encodings_from_dir(directory):
                     assert False
     return known_faces
 
-#known_faces = generate_encodings_from_dir("./KnownFaces/")
-#print(kf)
-#print("")
 
-def calculate_distance(embedding1, embedding2):
+
+
+
+def calculate_euclidean_distance(embedding1, embedding2):
     """
     Computes the Euclidean distance between two face embeddings.
     """
@@ -357,17 +362,17 @@ def calculate_distance(embedding1, embedding2):
 
 def check_for_face(target_encoding, threshold, known_faces):
     for face_name, face_encoding in known_faces:
-        dist = calculate_distance(target_encoding, face_encoding)
-        # print("face_name, dist: ", face_name, dist)
+        dist = calculate_euclidean_distance(target_encoding, face_encoding)
+        print("face_name, dist: ", face_name, dist)
         if dist <= threshold:
             return face_name
     return ("")
         
 def check_region_for_known_face(face_region, thresh, known_faces):
-    this_face_encodings = embedder.extract(face_region, threshold=thresh) # face_region
+    this_face_encodings = embedder.extract(face_region) #, threshold=thresh) # face_region
     if this_face_encodings:
         this_face_encoding = this_face_encodings[0]['embedding']
-        face_name = check_for_face(this_face_encoding, 0.8, known_faces)
+        face_name = check_for_face(this_face_encoding, thresh, known_faces)
         print(face_name)
         #fn_ttl = FACE_NAME_TTL
     else:
@@ -376,11 +381,12 @@ def check_region_for_known_face(face_region, thresh, known_faces):
     return face_name
 
 
-def calc_face_dist(face_a_x, face_a_y, face_b_x, face_b_y):
+def calc_face_physical_dist(face_a_x, face_a_y, face_b_x, face_b_y):
     return math.sqrt( math.pow( (face_a_x - face_b_x),2) + math.pow((face_a_y - face_b_y) ,2) )
 
-def calc_person_face_dist(person1, person2):
-    return calc_face_dist(person1.x_pos, person1.y_pos, person2.x_pos, person2.y_pos)
+def calc_person_physical_dist(person1, person2):
+    return calc_face_physical_dist(person1.x_pos, person1.y_pos, person2.x_pos, person2.y_pos)
+
 
 def preprocess_face(image, target_size=(160, 160)):
     """
@@ -411,8 +417,8 @@ def detect_ball(frame):
             this_item_conf = conf
 
             label = f"{model.names[int(cls)]} {conf:.2f}"
-            if this_item in items:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            if DEBUG_YOLO or (this_item in items):
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
                 cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                 ball_x, ball_y = get_pos_from_box([x1,y1,x2,y2])
                 return( ball_x, ball_y )  
@@ -423,34 +429,35 @@ def detect_ball(frame):
 
 def detect_faces(frame, max_faces = 5, PROB_THRESH = 0.90):
     face_list = []
-    boxes, probs = mtcnn.detect(frame, landmarks=False)
+    result = mtcnn.detect_faces(frame)
 
-    if boxes is not None:
-        face_count = 0
-        for box, prob in zip(boxes, probs): 
-            if face_count >= max_faces:
-                break
-            if prob > PROB_THRESH:
-                try:
-                    # Set up region to look for known faces
-                    face_region = frame[ int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+    face_count = 0
+    for found_face in result:
+        if face_count >= max_faces:
+            break
+        box = found_face['box'] # The 'box' key contains a list or tuple of [x, y, width, height]
+        keypoints = found_face['keypoints']
+        confidence = found_face['confidence']
+        if confidence > PROB_THRESH:
+            try:
+                # Set up region to look for known faces
+                face_region = frame[ box[1]:(box[1]+box[3]), int(box[0]):int(box[0]+box[2]) ]
+                
+                # Equalize the Y channel
+                #ycrcb = cv2.cvtColor(face_region, cv2.COLOR_RGB2YCrCb)
+                #ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0]) # FIXME: Still useful???
+                #face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
 
-                    ycrcb = cv2.cvtColor(face_region, cv2.COLOR_BGR2YCrCb)
+                cv2.imshow('face_region', face_region) 
+                cv2.moveWindow("face_region", 40,30)
 
-                    # Equalize the Y channel
-                    ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0])
+                box_cv2 = [box[0], box[1], box[0]+box[2], box[1]+box[3] ] # This is a CV2 box, not MTCNN box
+                pos_x, pos_y = get_pos_from_box(box_cv2)
+                face_list.append(Person(pos_x, pos_y, face_region, ""))    
+                face_count += 1            
+            except:
+                pass
 
-                    # Convert back to BGR
-                    face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
-
-                    cv2.imshow('face_region', face_region) 
-                    cv2.moveWindow("face_region", 40,30)
-
-                    pos_x, pos_y = get_pos_from_box(box)
-                    face_list.append(Person(pos_x, pos_y, face_region))    
-                    face_count += 1            
-                except:
-                    pass
     return face_list
                 
 
@@ -464,10 +471,14 @@ def detect_faces(frame, max_faces = 5, PROB_THRESH = 0.90):
 print("*** Starting ***")
 pygame.init()
 
-# Create detector    
+
+# Create face detector    
 if enable_face_detect:
-    mtcnn = MTCNN()
+    mtcnn = MTCNN() # device="CPU:0"
+
+if enable_face_recog:
     known_faces = generate_encodings_from_dir("./KnownFaces/")
+
 
 # Video Capture and display (only 1st 2 backends work on Win11?)
 if HOME:
@@ -504,31 +515,26 @@ body_duration_count = 0
 person_offset_x = 0
 person_offset_y = 0
 
-last_looked_away = False  # check if the last state was "look away", so you always come back to a person
-current_face_name = ""
-known_face_x = 9999
-known_face_y = 9999
-
-ave_face_dist = 3  # How much the faces are moving, on average
-
 assert num_people > 0
 random_people_list = choose_people_locations(num_people, enable_face_camera) 
 people_list = random_people_list.copy()  # Initially, all people are random
 new_people_list = []
 
 
+#################
 ### Main Loop ###
+#################
 
 while True:
 
-    clock.tick(20)  # Frame Rate = 30 fps
+    clock.tick(20)  # Frame Rate = 20 fps
 
     # Read the frame from the webcam
     ret, frame = cap.read()
     if not ret:
         continue
     frame = cv2.flip(frame, 1)
-
+    
     if enable_face_detect:
         new_people_list = detect_faces(frame, num_people)
 
@@ -537,61 +543,42 @@ while True:
         if ball_loc_x is not None:
             new_people_list.insert(0,Person(ball_loc_x, ball_loc_y, name="mic"))
 
+    # Check for real people that have moved only a little bit, update their location
+    for i in range(len(new_people_list)):  # new_people_list is always the same or smaller than people_list
+        for j in range(len(new_people_list)):
+            new_face_dist = calc_person_physical_dist(people_list[i], new_people_list[j])
+            if new_face_dist < 5:  # If the face only moved a bit, update the location
+                people_list[i].x_pos = new_people_list[j].x_pos
+                people_list[i].y_pos = new_people_list[j].y_pos
+                # new_people_list.pop(j) # FIXME: Maybe???
+                break
 
-    # Decrement time-to-live for each person, choose random if timed-out
+    # Decrement time-to-live for each person, choose new person (real or not) if timed-out
     for i in range(len(people_list)):
         if people_list[i].time_to_live > 0: 
             people_list[i].time_to_live = people_list[i].time_to_live - 1
-        else:
-            people_list[i] = choose_person_location(i, enable_face_camera)  # Choose a new random person
-            
-
-
-    # Choose to keep a face or not, as they time-out
-    max_list = min(len(new_people_list), len(people_list))   #FIXME: Check this
-    for i in range(max_list-1, -1, -1):  # Go thru backwards
-        # Check distance from new people to existing people
-        new_face_dist = calc_person_face_dist(people_list[i], new_people_list[i])
-        if (new_face_dist > 0):  # Only include non-random faces, ie faces that move, but not newly selected faces
-            ave_face_dist = max((5*ave_face_dist + new_face_dist) / 6, 1) # FIXME: Tweak these parameters
-        #print("New Face Dist, ave: ", new_face_dist, ave_face_dist)
-
-        if new_face_dist > 25: # was 7 # FIXME: what should this be???
+        elif i < len(new_people_list):
             people_list[i] = new_people_list[i]
             people_list[i].time_to_live = FACE_DET_TTL
-            people_list[i].name = ""
-        elif (new_face_dist <= 5) and (people_list[i].time_to_live > 0):  # was 5
-            people_list[i].x_pos = new_people_list[i].x_pos
-            people_list[i].y_pos = new_people_list[i].y_pos
         else:
             people_list[i] = choose_person_location(i, enable_face_camera)  # Choose a new random person
-            
-    
-        if enable_motion_detect and (new_face_dist > 1.2*ave_face_dist): #FIXME: Average not working well  #4.0*ave_face_dist):  # Face is moving, focus there (for 1st moving face)
-            time.sleep(0.25)
-            print("Found moving", person_num, i)
-            person_num = i
-            
+
 
     # Recognize known faces
-
     if enable_face_recog:
         for person in people_list:
-            if (person.name == "") and (len(person.face_region) > 0):
-                face_name = check_region_for_known_face(person.face_region, 0.6, known_faces)
+            if ((person.name == "") or (person.name == "<real>")) and (len(person.face_region) > 0):
+                face_name = check_region_for_known_face(person.face_region, 0.9, known_faces)
                 if len(face_name) > 0:
                     person.name = face_name
 
 
     # Draw all the people
-
     for person in people_list:
         this_x, this_y = get_screen_position((person.x_pos, person.y_pos))
         draw_person_loc(frame, this_x, this_y, person.name)
 
-
     # Look at one person, or switch
-
     if head_duration_count <= 0:
         event_prob = np.random.randint(0,100)
         if event_prob < likelihood_of_first_face:   # Look at the main (same) person
@@ -599,18 +586,8 @@ while True:
             person_offset_x = 0
             person_offset_y = 0
             head_duration_count = abs(int(np.random.normal(1,20)))+7  # num of frames to keep looking at this person
-            last_looked_away = False
             phyz_note = ""
-            current_face_name = ""
-        elif event_prob < 75 and enable_randomize_look:  # Look away a little
-            person_offset_x = np.random.randint(5,10) * np.random.choice((-1,1))
-            person_offset_y = np.random.randint(-10,10)
-            head_duration_count = abs(int(np.random.normal(3,5)))+2  # num of frames to keep looking at this person
-            last_looked_away = True
-            print("Look away: ", person_offset_x, person_offset_y)
-            phyz_note = "Glance"
         else:   # Switch person
-            #time.sleep(0.5) #FIXME
             new_person_num = person_num
             while new_person_num == person_num:
                 new_person_num = np.random.randint(0,len(people_list))
@@ -619,9 +596,7 @@ while True:
             person_offset_x = 0
             person_offset_y = 0
             head_duration_count = abs(int(np.random.normal(3,15)))+5  # num of frames to keep looking at this person
-            last_looked_away = False
             phyz_note = ""
-            current_face_name = ""
     else:
         head_duration_count -= 1
 
@@ -662,5 +637,4 @@ while True:
 # Release the video capture and close the window
 cap.release()
 cv2.destroyAllWindows()
-print("EXITING NOW")
 exit()
