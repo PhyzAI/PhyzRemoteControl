@@ -63,16 +63,17 @@ enable_GUI = True
 enable_MC = True # enable Motor Control
 enable_face_detect = True
 enable_face_recog = True
-enable_ball_detect= False
+enable_ball_detect = True
 enable_show_phyz_loc = True
 enable_randomize_look = False # Look around a little bit for each face
 enable_face_camera = True # Look more straight ahead
 enable_motion_detect = False
 DEBUG_YOLO = False # Show everything YOLO detects
+DEBUG_MTCNN = True # Show everyone MTCNN detects
 
 SAME_FACE_DIST = 10  # If face only physically moves less than this, don't dump the name
 
-likelihood_of_first_face = 50 # percent
+likelihood_of_first_face = 30 # percent
 
 num_people = 5   # Number of "people" to include in the scene
 max_real_people = 3
@@ -425,8 +426,8 @@ def detect_ball(frame):
 
             label = f"{model.names[int(cls)]} {conf:.2f}"
             if DEBUG_YOLO or (this_item in items):
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
                 ball_x, ball_y = get_pos_from_box([x1,y1,x2,y2])
                 return( ball_x, ball_y )  
             
@@ -437,10 +438,11 @@ def detect_ball(frame):
 def detect_faces(frame, max_faces = 5, PROB_THRESH = 0.90):
     face_list = []
     result = mtcnn.detect_faces(frame)
+    
 
     face_count = 0
     for found_face in result:
-        if face_count >= max_faces:
+        if not DEBUG_MTCNN and (face_count >= max_faces):
             break
         box = found_face['box'] # The 'box' key contains a list or tuple of [x, y, width, height]
         keypoints = found_face['keypoints']
@@ -592,7 +594,7 @@ while True:
             person_num = 0
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = abs(int(np.random.normal(1,15)))+5  # num of frames to keep looking at this person
+            head_duration_count = abs(int(np.random.normal(2,10)))+5  # num of frames to keep looking at this person
             phyz_note = ""
         else:   # Switch person
             new_person_num = person_num
@@ -602,7 +604,7 @@ while True:
             person_num = new_person_num
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = abs(int(np.random.normal(3,15)))+5  # num of frames to keep looking at this person
+            head_duration_count = abs(int(np.random.normal(2,10)))+5  # num of frames to keep looking at this person
             phyz_note = ""
     else:
         head_duration_count -= 1
