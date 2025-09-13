@@ -35,6 +35,7 @@
 #   pip install pygame
 #   pip install tensorflow
 #   pip install keras-facenet
+#   pip3 install pyserial
 #   pip install opencv-python # Comes in with ultralytics???
 #   pip install numpy   # for the display. # Comes in with ultralytics???
 #   put zmaestro.py in same directory as this file
@@ -59,7 +60,7 @@
 
 HOME = False   # At Keith's house
 enable_GUI = True
-enable_MC = False # enable Motor Control
+enable_MC = True # enable Motor Control
 enable_face_detect = True
 enable_face_recog = True
 enable_ball_detect= False
@@ -69,13 +70,15 @@ enable_face_camera = True # Look more straight ahead
 enable_motion_detect = False
 DEBUG_YOLO = False # Show everything YOLO detects
 
+SAME_FACE_DIST = 10  # If face only physically moves less than this, don't dump the name
+
 likelihood_of_first_face = 50 # percent
 
-num_people = 3   # Number of "people" to include in the scene
-max_real_people = 2
+num_people = 5   # Number of "people" to include in the scene
+max_real_people = 3
 assert max_real_people <= num_people
 
-FACE_DET_TTL = 45 # was 45 # Hold-time for face detection (in ticks)
+FACE_DET_TTL = 60 # was 45 # Hold-time for face detection (in ticks)
 RANDOM_FACE_TTL = 30 # was 80
 
 # Calibration to get the head to face you exactly (hopefully)
@@ -180,6 +183,8 @@ def draw_person_loc(image, pos_x, pos_y, face_name = "unknown", color = (0, 200,
     endAngle = 360
     thickness = 3
     angle = 0
+    if face_name == "<random>":
+        color = (200, 200, 0)
     cv2.ellipse(image, (pos_x, pos_y), axesLength, 
            angle, startAngle, endAngle, color, thickness)
     cv2.putText(image, face_name, (pos_x-15, pos_y+65), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
@@ -549,7 +554,7 @@ while True:
     for i in range(len(new_people_list)):  # new_people_list is always the same or smaller than people_list
         for j in range(len(new_people_list)):
             new_face_dist = calc_person_physical_dist(people_list[i], new_people_list[j])
-            if new_face_dist < 5:  # If the face only moved a bit, update the location
+            if new_face_dist < SAME_FACE_DIST:  # If the face only moved a bit, update the location
                 people_list[i].x_pos = new_people_list[j].x_pos
                 people_list[i].y_pos = new_people_list[j].y_pos
                 # new_people_list.pop(j) # FIXME: Maybe???
@@ -587,7 +592,7 @@ while True:
             person_num = 0
             person_offset_x = 0
             person_offset_y = 0
-            head_duration_count = abs(int(np.random.normal(1,20)))+7  # num of frames to keep looking at this person
+            head_duration_count = abs(int(np.random.normal(1,15)))+5  # num of frames to keep looking at this person
             phyz_note = ""
         else:   # Switch person
             new_person_num = person_num
