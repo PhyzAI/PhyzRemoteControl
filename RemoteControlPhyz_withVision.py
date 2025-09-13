@@ -3,6 +3,8 @@
 # Initial Rev, RKD 2024-08
 #
 # NOTE: Make sure you use a virtual environment, not the system python install
+# On PhyzAI, this Venv is "pytorch_venv"
+#   "C:\Users\User\Desktop\PhyzRemoteControl\pytorch_venv"
 #
 #
 # TODO:
@@ -55,7 +57,7 @@
 
 # Enable different basic operations
 
-HOME = True   # At Keith's house
+HOME = False   # At Keith's house
 enable_GUI = True
 enable_MC = False # enable Motor Control
 enable_face_detect = True
