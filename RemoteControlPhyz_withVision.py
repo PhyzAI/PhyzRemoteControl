@@ -35,7 +35,7 @@
 #   pip install pygame
 #   pip install tensorflow
 #   pip install keras-facenet
-#   pip3 install pyserial
+#   pip3 install pyserial # not serial !!!
 #   pip install opencv-python # Comes in with ultralytics???
 #   pip install numpy   # for the display. # Comes in with ultralytics???
 #   put zmaestro.py in same directory as this file
