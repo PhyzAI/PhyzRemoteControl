@@ -14,9 +14,17 @@ def pitch_shift(audio, shift_factor):
     else:
         return np.pad(resampled, (0, len(audio) - len(resampled)), 'constant')
 
-def speak_robot(text, pitch_factor=1.7, carrier_freq=85.0, carrier_amp=0.5):
+def speak_robot(text, pitch_factor=1.22, carrier_freq=115.0, carrier_amp=0.4):
+    # Initialize the engine
     engine = pyttsx3.init()
-    
+
+    # Get the current default rate (usually ~200)
+    current_rate = engine.getProperty('rate') 
+    print(f"Default speaking speed: {current_rate} words per minute")
+
+    # Set a new, slower rate for your robot. 
+    # Try somewhere between 130 and 160 for a cold, calculated robot cadence.
+    engine.setProperty('rate', 145)
     
     # --- VOICE SELECTION BLOCK ---
     voices = engine.getProperty('voices')
@@ -48,7 +56,7 @@ def speak_robot(text, pitch_factor=1.7, carrier_freq=85.0, carrier_amp=0.5):
     if selected_voice_id:
         engine.setProperty('voice', selected_voice_id)
     else:
-        print("Warning: Could not explicitly find a male voice. Using default Mac voice.")
+        print("Warning: Could not explicitly find a male voice. Using default voice.")
     # ------------------------------
 
 
@@ -94,4 +102,5 @@ def speak_robot(text, pitch_factor=1.7, carrier_freq=85.0, carrier_amp=0.5):
         os.remove(temp_filename)
 
 if __name__ == "__main__":
-    speak_robot("PhyzAI system online. External mixer bypassed.")
+    #speak_robot("PhyzAI system online. External mixer bypassed.")
+    speak_robot("Ah. I'm PhyzAI, I love solving math and engineering problems")
