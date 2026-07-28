@@ -13,3 +13,5 @@
 Basic Object detection with YOLO 2'.py
 /Images
 /pytorch_venv
+/unisal
+.vscode/settings.json
