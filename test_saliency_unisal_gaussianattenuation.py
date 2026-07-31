@@ -1,4 +1,12 @@
+# PHYZAI New Vision Processing Pipeline Testing
+# July 2026: initial version by TheRFengineer@gmail.com
+
+
 # conda activate saliency2_env
+# tested with python 3.11.15, torch 2.7.1, opencv-python 4.8.1, numpy 1.26.5
+# Instructions for installing unisal are here:
+# https://github.com/rdroste/unisal
+# I'm not sure all the dependencies they list are correct.  I don't seem to need torchvision.
 
 
 # TODO: 
@@ -47,7 +55,6 @@ import os
 import time
 import cv2
 import torch
-from torchvision import transforms
 import numpy as np
 import threading
 import random
