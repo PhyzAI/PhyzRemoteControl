@@ -1,5 +1,47 @@
 # conda activate saliency2_env
 
+
+# TODO: 
+# * Add some randomness to the weight of each point
+
+
+# NOTES:
+# * When there are groups of people, may need to adjust parameters.  Less motion weight?
+# * Secondary loop to find # of faces, and adjust saliency weight accordingly.
+#   If many faces, then reduce motion weight, and increase secondary dwell time.
+
+
+
+## FEATURE TOGGLES
+ENABLE_MOTION_FLASH = True  # Set to False to disable the orange burst
+FRAME_PROCESSING_SCALE = 0.5  # Scale frame to 50% for fast processing
+SALIENCY_RADIUS_SCALE = 1.1 # Make radius slightly larger than the detected blob for better target coverage
+
+
+## SALIENCY PARAMETERS
+SECONDARY_TARGETS_THRESHOLD = 0.10  # Threshold for secondary target extraction (0.20 = 20% of max saliency)
+MAX_PEAKS = 5  # Maximum number of secondary targets to extract per frame
+MIN_DISTANCE = 60  # Minimum distance between extracted peaks to avoid clustering
+# Note: other parameters are defined in the PhyzyGazeManager instantantiation
+
+
+## GAZE PARAMETERS
+IOR_DURATION = 6.0  # Inhibition of Return duration in seconds.  Was 4.0
+
+
+## MOTION TUNING PARAMETERS
+# Rate at which past motion fades out per frame (0.0 to 1.0).
+# A higher value (0.9) creates a longer temporal "motion trail" or memory, 
+# helping keep Phyzy focused on recent movement even if a hand/object briefly stops moving.
+MOTION_DECAY_RATE = 0.9
+
+# Blending weight of motion energy vs. static visual saliency (UNISAL).
+# At 0.7, dynamic movement (waving hands, moving faces) heavily dominates 
+# static visual clutter, ensuring motion reliably triggers gaze shifts and reflex locks.
+MOTION_WEIGHT = 0.7  # was 0.5
+
+
+
 import sys
 import os
 import time
@@ -10,12 +52,6 @@ import numpy as np
 import threading
 import random
 import math
-
-
-# FEATURE TOGGLES
-ENABLE_MOTION_FLASH = True  # Set to False to disable the orange shockwave ring
-FRAME_PROCESSING_SCALE = 0.5  # Scale frame to 50% for fast processing
-SALIENCY_RADIUS_SCALE = 1.5 # Make radius slightly larger than the detected blob for better target coverage
 
 
 # Import UNISAL modules from the repository
@@ -37,13 +73,15 @@ else:
 print(f"Using compute device: {device}")
 
 
+
+
 ###################
 # Gaze Functions
 ###################
 
 class PhyzyGazeManager:
     def __init__(self, primary_dwell_range=(1.8, 3.5), secondary_dwell_range=(1.0, 1.4), 
-                 reflex_dwell_range=(0.6, 1.0), ior_duration=4.0, motion_cooldown=1.0):
+                 reflex_dwell_range=(0.6, 1.0), ior_duration=IOR_DURATION, motion_cooldown=1.0):
         """
         Gaze Engine Parameters:
         
@@ -178,18 +216,46 @@ class PhyzyGazeManager:
                 self.is_glance = False
                 self.anchor_gaze = None
                 
-                if candidates:
+                # Filter candidates to find the highest-scoring candidate OUTSIDE IOR zones
+                valid_candidates = []
+                for cx, cy, cscore, cradius in candidates:
+                    in_ior = False
+                    for ix, iy, itime, irad in self.ior_list:
+                        # Check distance against active IOR entries
+                        if math.hypot(cx - ix, cy - iy) < (irad * 1.5):
+                            in_ior = True
+                            break
+                    if not in_ior:
+                        valid_candidates.append((cx, cy, cscore, cradius))
+
+                if valid_candidates:
+                    # Pick the top valid non-suppressed candidate
+                    best_x, best_y, best_score, best_radius = valid_candidates[0]
+                elif candidates:
+                    # SAFEGUARD: If all peaks were in IOR, fallback to top raw candidate
+                    # to keep gaze continuous and avoid vanishing eyes
                     best_x, best_y, best_score, best_radius = candidates[0]
+                else:
+                    best_x, best_y, best_score, best_radius = None, None, None, None
+
+                if best_x is not None:
+                    # Store current face location as anchor if branching to a secondary glance
+                    if self.current_gaze is not None and not self.is_glance:
+                        self.anchor_gaze = (self.current_gaze[0], self.current_gaze[1], self.current_radius)
+
                     self.current_gaze = (best_x, best_y)
                     self.current_radius = best_radius
                     self.gaze_start_time = current_time
                     
-                    is_primary = (best_score >= 0.65)
+                    is_primary = (best_score >= 0.85)
                     self.is_glance = not is_primary
-                    mode = "primary" if is_primary else "secondary"
-                    self.current_dwell_time = random.uniform(*getattr(self, f"{mode}_dwell_range"))
+                    
+                    dwell_range = self.secondary_dwell_range if self.is_glance else self.primary_dwell_range
+                    self.current_dwell_time = random.uniform(*dwell_range)
                 else:
+                    # Only clear gaze if candidates list was completely empty from the extraction step
                     self.current_gaze = None
+
 
         else:
             # Smooth pursuit tracking during active dwell
@@ -213,6 +279,12 @@ class PhyzyGazeManager:
 
         return self.current_gaze, self.current_radius
 
+
+
+
+######################
+# Webcam
+######################
 
 class ThreadedWebcam:
     """
@@ -250,6 +322,13 @@ class ThreadedWebcam:
         if self.thread.is_alive():
             self.thread.join(timeout=1.0)
         self.cap.release()
+
+
+
+
+##################
+# Drawing
+##################
 
 
 def draw_reflex_flash(frame, reflex_event, current_time, duration=0.35):
@@ -300,12 +379,32 @@ def draw_phyzy_eyes(img, gaze_pt, eye_radius=2*24, pupil_radius=2*10):
         cv2.circle(img, (eye_center[0] - 4, eye_center[1] - 5), 4, (255, 255, 255), -1)
 
 
+def draw_targets_and_eyes(overlay, target_coords, phyzy_gaze):
+    """Renders candidate target markers and Phyzy's eye overlay on the display frame."""
+    for i, (frame_x, frame_y, score, frame_rad) in enumerate(target_coords):
+        color = (0, 255, 0) if i == 0 else (255, 255, 0)
+        
+        cv2.drawMarker(overlay, (frame_x, frame_y), color, 
+                       markerType=cv2.MARKER_CROSS, markerSize=18, thickness=2)
+        cv2.circle(overlay, (frame_x, frame_y), 12, color, 2)
+
+        label = f"P{i+1}: ({frame_x},{frame_y}) [{score:.2f}]"
+        cv2.putText(overlay, label, (frame_x + 15, frame_y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+    if phyzy_gaze is not None:
+        draw_phyzy_eyes(overlay, phyzy_gaze)
+
+
+
+
+
 ###################
 ## Saliency Core ##
 ###################
 
 def process_motion_memory(frame, prev_gray, motion_memory, 
-                          decay_rate=0.85, 
+                          MOTION_DECAY_RATE=0.85, 
                           spike_threshold=0.25,  
                           min_area=150):         
     
@@ -327,7 +426,7 @@ def process_motion_memory(frame, prev_gray, motion_memory,
     max_diff = motion_blur.max()
     current_motion = motion_blur / max_diff if max_diff > 15.0 else np.zeros((288, 384), dtype=np.float32)
 
-    updated_memory = np.maximum(motion_memory * decay_rate, current_motion)
+    updated_memory = np.maximum(motion_memory * MOTION_DECAY_RATE, current_motion)
 
     # Motion Spike Reflex Detection
     motion_event = None
@@ -461,7 +560,7 @@ def apply_saliency_suppression_and_extract_targets(smoothed_map, gaze_manager, c
 
     # 4. Extract candidates (threshold at 0.20 for secondary targets)
     raw_peaks = extract_saliency_peaks_with_radius(
-        saliency_for_peaks, max_peaks=3, min_distance=30, threshold=0.20
+        saliency_for_peaks, max_peaks=MAX_PEAKS, min_distance=MIN_DISTANCE, threshold=SECONDARY_TARGETS_THRESHOLD
     )
 
     # 5. SAFEGUARD: If threshold filtered out everything, grab the single highest peak
@@ -483,28 +582,13 @@ def apply_saliency_suppression_and_extract_targets(smoothed_map, gaze_manager, c
 
 
 
-def draw_targets_and_eyes(overlay, target_coords, phyzy_gaze):
-    """Renders candidate target markers and Phyzy's eye overlay on the display frame."""
-    for i, (frame_x, frame_y, score, frame_rad) in enumerate(target_coords):
-        color = (0, 255, 0) if i == 0 else (255, 255, 0)
-        
-        cv2.drawMarker(overlay, (frame_x, frame_y), color, 
-                       markerType=cv2.MARKER_CROSS, markerSize=18, thickness=2)
-        cv2.circle(overlay, (frame_x, frame_y), 12, color, 2)
-
-        label = f"P{i+1}: ({frame_x},{frame_y}) [{score:.2f}]"
-        cv2.putText(overlay, label, (frame_x + 15, frame_y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-    if phyzy_gaze is not None:
-        draw_phyzy_eyes(overlay, phyzy_gaze)
 
 
 #############################
 # Main Loop
 #############################
 
-# 1. Initialize UNISAL Model
+# Initialize UNISAL Model
 model = UNISAL(sources=['dhf1k', 'salicon']).to(device)
 model.eval()
 
@@ -544,7 +628,8 @@ if os.path.exists(weights_path):
     missing, unexpected = model.load_state_dict(cleaned_dict, strict=False)
     print(f"Loaded {len(cleaned_dict)} weights into UNISAL (Missing: {len(missing)}).")
 
-# 2. Open Webcam Stream
+
+# Open Webcam Stream
 cap = ThreadedWebcam(src=0)
 time.sleep(0.5)
 
@@ -557,14 +642,14 @@ alpha = 0.5
 
 prev_gray = None
 motion_memory = np.zeros((288, 384), dtype=np.float32)
-decay_rate = 0.9
-motion_weight = 0.5 
+
 
 gaze_manager = PhyzyGazeManager(
     primary_dwell_range=(1.8, 3.5),   # Deep focus (1.8s to 3.5s)
     secondary_dwell_range=(0.9, 1.8), # Quick glances (0.9s to 1.8s)
     ior_duration=4.0                  # Cooldown duration
 )
+
 
 with torch.no_grad():
     while True:
@@ -586,7 +671,7 @@ with torch.no_grad():
 
         # 1. Process Motion Memory and Detect Spikes
         current_motion, prev_gray, motion_memory, motion_event = process_motion_memory(
-            frame, prev_gray, motion_memory, decay_rate
+            frame, prev_gray, motion_memory, MOTION_DECAY_RATE
         )
 
         # 2. Reflex Fast-Path: Trigger Immediate Glance on Motion Spike
@@ -599,7 +684,7 @@ with torch.no_grad():
         static_sal = run_unisal_model(model, frame, device)
 
         # 4. Blend Motion Memory & Apply Temporal Smoothing
-        combined_saliency = np.clip(static_sal + (motion_memory * motion_weight), 0.0, 1.0)
+        combined_saliency = np.clip(static_sal + (motion_memory * MOTION_WEIGHT), 0.0, 1.0)
         smoothed_map = combined_saliency if smoothed_map is None else (alpha * combined_saliency + (1 - alpha) * smoothed_map)
 
         # 5. Single Pass: Unified Smooth Attenuation & Candidate Extraction
@@ -609,18 +694,12 @@ with torch.no_grad():
 
         phyzy_gaze, current_radius = gaze_manager.update(target_coords, current_time)
 
-        # 6. Render Visualization Overlay
-        # Normalize the suppressed map so the brightest remaining spot hits 1.0 (red)
-        map_min, map_max = suppressed_sal_map.min(), suppressed_sal_map.max()
-        if map_max - map_min > 1e-5:
-            norm_suppressed_map = (suppressed_sal_map - map_min) / (map_max - map_min)
-        else:
-            norm_suppressed_map = suppressed_sal_map
 
-        sal_visual = (cv2.resize(norm_suppressed_map, (orig_w, orig_h)) * 255).astype(np.uint8)
+        # 6. Render Visualization Overlay
+        # Render suppressed_sal_map directly (already scaled in Step 5)
+        sal_visual = (cv2.resize(suppressed_sal_map, (orig_w, orig_h)) * 255).astype(np.uint8)
         heatmap = cv2.applyColorMap(sal_visual, cv2.COLORMAP_JET)
         overlay = cv2.addWeighted(frame, 0.6, heatmap, 0.4, 0)
-
 
         
         draw_targets_and_eyes(overlay, target_coords, phyzy_gaze)
