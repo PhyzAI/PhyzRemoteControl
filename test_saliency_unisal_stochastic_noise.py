@@ -3,7 +3,7 @@
 
 
 # conda activate saliency2_env
-# tested with python 3.11.15, torch 2.7.1, opencv-python 4.8.1, numpy 1.26.5
+# tested with python 3.11.15, pytorch 2.5.1, py-opencv 5.0.0, numpy 2.4.6
 # Instructions for installing unisal are here:
 # https://github.com/rdroste/unisal
 # I'm not sure all the dependencies they list are correct.  I don't seem to need torchvision.
