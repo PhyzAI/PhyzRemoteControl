@@ -75,7 +75,7 @@ SAME_FACE_DIST = 10  # If face only physically moves less than this, don't dump 
 
 likelihood_of_first_face = 30 # percent
 
-num_people = 5   # Number of "people" to include in the scene
+num_people = 4  # Number of "people" to include in the scene
 max_real_people = 3
 assert max_real_people <= num_people
 
@@ -138,8 +138,8 @@ arm_right_channel = 3
 head_x_range = (1520*4, 1620*4, 1728*4) # head left/right
 head_y_range = (735*4, 936*4, 1136*4) # head up / down
 head_tilt_range = (1237*4, 1337*4, 1437*4) 
-arm_right_range = (896*4, 2608*4, 2608*4) 
-arm_left_range = (944*4, 2000*4, 2000*4)
+arm_right_range = (775*4, 775*4, 2532*4) 
+arm_left_range = (1100*4, 1100*4, 1885*4)
         
 
 
