@@ -13,14 +13,51 @@ from insightface.app import FaceAnalysis
 os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 
 # -----------------------------------------------------------------------------
-# 1. Initialize InsightFace App
+# 1. Initialize InsightFace App & Saliency Extractor
 # -----------------------------------------------------------------------------
 app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
 app.prepare(ctx_id=0, det_size=(640, 640))
 
+# Built-in lightweight Spectral Residual Saliency detector
+saliency_detector = cv2.saliency.StaticSaliencySpectralResidual_create()
+
 def cosine_similarity(emb1, emb2):
     """Calculates cosine similarity between two normalized feature vectors."""
     return float(np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2)))
+
+def extract_salient_points(frame, num_points=3):
+    """
+    Computes a fast saliency map and extracts top peak interest locations.
+    Resizes internally for sub-millisecond execution.
+    """
+    h, w = frame.shape[:2]
+    small_frame = cv2.resize(frame, (160, 90))
+    
+    success, sal_map = saliency_detector.computeSaliency(small_frame)
+    if not success:
+        return []
+
+    # Threshold map to find highest contrast/interest regions
+    sal_uint8 = (sal_map * 255).astype(np.uint8)
+    _, thresh = cv2.threshold(sal_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    points = []
+    scale_x = w / 160.0
+    scale_y = h / 90.0
+
+    # Sort contours by area to find distinct visual regions
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+    for c in contours[:num_points]:
+        M = cv2.moments(c)
+        if M["m00"] != 0:
+            cx = int((M["m10"] / M["m00"]) * scale_x)
+            cy = int((M["m01"] / M["m00"]) * scale_y)
+            points.append((cx, cy))
+
+    return points
 
 # -----------------------------------------------------------------------------
 # 2. Motion Detector Class
@@ -72,39 +109,33 @@ class MotionDetector:
 
         return motion_boxes, motion_centroid
 
-
-
 # -----------------------------------------------------------------------------
-# 3. Gaze & Reflex Target Controller
+# 3. Gaze & Reflex Target Controller (Face > Motion > Saliency)
 # -----------------------------------------------------------------------------
 class GazeController:
-    def __init__(self, frame_w, frame_h, num_fake_faces=3):
+    def __init__(self, frame_w, frame_h):
         self.frame_w = frame_w
         self.frame_h = frame_h
-        
-        # Configurable fake target positions
-        self.fake_targets = [
-            (random.randint(100, frame_w - 100), random.randint(100, frame_h - 100))
-            for _ in range(num_fake_faces)
-        ]
+        self.salient_targets = []
         
         # Smooth gaze tracking variables
         self.current_gaze = [frame_w // 2, frame_h // 2]
         self.target_gaze = [frame_w // 2, frame_h // 2]
         self.last_switch_time = time.time()
-        self.hold_duration = 2.5  # Seconds to dwell on standard target
+        self.hold_duration = 2.5
 
         # Motion Quick-Glance Reflex state
         self.in_motion_glance = False
         self.glance_start_time = 0.0
-        self.glance_duration = 0.7   # Duration to look at sudden motion (seconds)
+        self.glance_duration = 0.7
         self.last_glance_time = 0.0
-        self.glance_cooldown = 1.5   # Cooldown before triggering another motion glance
+        self.glance_cooldown = 1.5
 
-    def update(self, real_face_centers, motion_centroid):
+    def update(self, real_face_centers, motion_centroid, salient_points):
         now = time.time()
+        self.salient_targets = salient_points
 
-        # Check for Quick Motion Glance trigger
+        # Motion Quick Glance Trigger
         if motion_centroid is not None:
             if not self.in_motion_glance and (now - self.last_glance_time > self.glance_cooldown):
                 self.in_motion_glance = True
@@ -116,45 +147,33 @@ class GazeController:
         if self.in_motion_glance:
             if now - self.glance_start_time > self.glance_duration:
                 self.in_motion_glance = False
-                self.last_switch_time = 0  # Force instant re-evaluation of ambient target
+                self.last_switch_time = 0
 
-        # Standard Ambient Target Switching (if not currently performing a motion glance)
+        # Ambient Target Selection
         if not self.in_motion_glance:
             if now - self.last_switch_time > self.hold_duration:
                 self.last_switch_time = now
                 self.hold_duration = random.uniform(1.8, 3.5)
-                
-                # Slowly drift one simulated target to a new location
-                idx = random.randint(0, len(self.fake_targets) - 1)
-                self.fake_targets[idx] = (
-                    random.randint(100, self.frame_w - 100),
-                    random.randint(100, self.frame_h - 100)
-                )
 
-                # Probabilistic Target Selection:
-                # 75% chance to focus on a real face (if available), 25% chance to glance at a Sim Target
-                if real_face_centers and random.random() < 0.75:
+                # Prioritization: 70% chance face, 30% salient point (or fallback if no face)
+                if real_face_centers and random.random() < 0.70:
                     self.target_gaze = list(random.choice(real_face_centers))
+                elif self.salient_targets:
+                    self.target_gaze = list(random.choice(self.salient_targets))
                 else:
-                    self.target_gaze = list(random.choice(self.fake_targets))
+                    self.target_gaze = [self.frame_w // 2, self.frame_h // 2]
 
-        # Exponential smoothing (faster speed during quick motion glance)
+        # Exponential smoothing
         smooth_factor = 0.28 if self.in_motion_glance else 0.12
         self.current_gaze[0] += (self.target_gaze[0] - self.current_gaze[0]) * smooth_factor
         self.current_gaze[1] += (self.target_gaze[1] - self.current_gaze[1]) * smooth_factor
 
         return int(self.current_gaze[0]), int(self.current_gaze[1])
 
-
-
-
 # -----------------------------------------------------------------------------
 # 4. Drawing Functions
 # -----------------------------------------------------------------------------
 def draw_phyzy_eyes(img, gaze_pt, is_glancing=False, eye_radius=48, pupil_radius=20):
-    """
-    Draws stylized cartoon eyes centered directly at gaze_pt (x, y).
-    """
     if gaze_pt is None:
         return
 
@@ -163,18 +182,12 @@ def draw_phyzy_eyes(img, gaze_pt, is_glancing=False, eye_radius=48, pupil_radius
 
     left_eye = (gx - spacing, gy)
     right_eye = (gx + spacing, gy)
-
-    # Change outline color when triggering a quick motion glance
     border_color = (0, 165, 255) if is_glancing else (0, 0, 0)
 
     for eye_center in [left_eye, right_eye]:
-        # White Sclera
         cv2.circle(img, eye_center, eye_radius, (255, 255, 255), -1)
-        # Outer Border
         cv2.circle(img, eye_center, eye_radius, border_color, 3)
-        # Pupil
         cv2.circle(img, eye_center, pupil_radius, (20, 20, 20), -1)
-        # Specular Catchlight
         cv2.circle(img, (eye_center[0] - 4, eye_center[1] - 5), 4, (255, 255, 255), -1)
 
 # -----------------------------------------------------------------------------
@@ -202,10 +215,10 @@ if os.path.exists(KNOWN_FACES_DIR):
 RECOGNITION_THRESHOLD = 0.45
 
 # -----------------------------------------------------------------------------
-# 6. Initialize Pygame, Camera Feed & Control Systems
+# 6. Initialize Pygame & Camera Feed
 # -----------------------------------------------------------------------------
 pygame.init()
-pygame.display.set_caption("PhyzAI Remote Control - Motion Glance & Eye Overlay")
+pygame.display.set_caption("PhyzAI Remote Control - Saliency & Vision")
 
 cap = cv2.VideoCapture(0)
 if not cap.isOpened():
@@ -218,7 +231,7 @@ screen = pygame.display.set_mode((frame_width, frame_height))
 clock = pygame.time.Clock()
 
 motion_detector = MotionDetector(min_area=2000, threshold=25)
-gaze_controller = GazeController(frame_width, frame_height, num_fake_faces=3)
+gaze_controller = GazeController(frame_width, frame_height)
 
 print(f"\nVision loop active at {frame_width}x{frame_height}. Press ESC to exit.")
 
@@ -244,7 +257,13 @@ try:
         for (mx, my, mw, mh) in motion_boxes:
             cv2.rectangle(display_frame, (mx, my), (mx + mw, my + mh), (255, 255, 0), 1)
 
-        # --- B. Face Recognition ---
+        # --- B. Saliency Extraction ---
+        salient_points = extract_salient_points(frame, num_points=3)
+        for sx, sy in salient_points:
+            cv2.circle(display_frame, (sx, sy), 8, (255, 0, 255), 1)
+            cv2.putText(display_frame, "Salient Point", (sx - 35, sy + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
+
+        # --- C. Face Recognition ---
         faces = app.get(frame)
         real_face_centers = []
 
@@ -276,22 +295,16 @@ try:
             cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(display_frame, label, (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        # --- C. Update Target Gaze & Reflex State ---
-        gaze_x, gaze_y = gaze_controller.update(real_face_centers, motion_centroid)
+        # --- D. Update Gaze Position ---
+        gaze_x, gaze_y = gaze_controller.update(real_face_centers, motion_centroid, salient_points)
 
-        # Draw ambient simulated face targets
-        for fx, fy in gaze_controller.fake_targets:
-            cv2.circle(display_frame, (fx, fy), 14, (180, 180, 180), 1)
-            cv2.putText(display_frame, "Sim Target", (fx - 30, fy + 26), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 180, 180), 1)
-
-        # --- D. Overlay Eye Graphic ---
+        # --- E. Draw Overlay Eyes ---
         draw_phyzy_eyes(display_frame, (gaze_x, gaze_y), is_glancing=gaze_controller.in_motion_glance)
 
-        # Indicate glance status on OSD
         if gaze_controller.in_motion_glance:
             cv2.putText(display_frame, "[REFLEX GLANCE]", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
-        # --- E. Render to Pygame Surface ---
+        # --- F. Render Screen ---
         rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         surface_data = np.rot90(rgb_frame)
         surface_data = np.flipud(surface_data)
