@@ -1,12 +1,20 @@
+# PHYZAI New Vision Processing Pipeline
+# with simplified libraries, and simple saliency
+# Oct 2026: initial version by TheRFengineer@gmail.com
+
+# TODO:
+
+
+
+
+
 import os
 import sys
 import time
-import math
 import random
 import numpy as np
-import cv2
+import cv2 # pip install opencv-contrib-python-headless
 import pygame
-import insightface
 from insightface.app import FaceAnalysis
 
 # Prevent Cocoa/Objective-C fork warnings on macOS
