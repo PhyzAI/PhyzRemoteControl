@@ -18,13 +18,15 @@ os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 # Global Feature Switches
 # -----------------------------------------------------------------------------
 ENABLE_SALIENCY = True  # Set to False to disable saliency detection pipeline
+ENABLE_COREML = True    # Set to False on Linux/Intel machines without CoreML support
 FACE_DET_INTERVAL = 4   # Run heavy face recognition every N frames (caching results in between)
 DET_SIZE = (320, 320)   # Reduced detection grid for faster processing
 
 # -----------------------------------------------------------------------------
 # 1. Initialize InsightFace App & Saliency Extractor
 # -----------------------------------------------------------------------------
-app = FaceAnalysis(name='buffalo_l', providers=['CoreMLExecutionProvider', 'CPUExecutionProvider'])
+providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider'] if ENABLE_COREML else ['CPUExecutionProvider']
+app = FaceAnalysis(name='buffalo_l', providers=providers)
 app.prepare(ctx_id=0, det_size=DET_SIZE)
 
 # Built-in lightweight Spectral Residual Saliency detector
