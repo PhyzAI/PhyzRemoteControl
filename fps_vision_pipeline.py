@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import random
+import threading
 import numpy as np
 import cv2  # pip install opencv-contrib-python-headless
 import pygame
@@ -28,8 +29,58 @@ ENABLE_COREML = True    # Set to False on Linux/Intel machines without CoreML su
 FACE_DET_INTERVAL = 4   # Run heavy face recognition every N frames (caching results in between)
 DET_SIZE = (320, 320)   # Reduced detection grid for faster processing
 
+# Gaze Cooldown Settings (Inhibition of Return)
+COOLDOWN_DURATION = 2.5  # Seconds to ignore a recently selected target region
+COOLDOWN_RADIUS = 120    # Radius in pixels around recent target points to ignore
+
 # -----------------------------------------------------------------------------
-# 1. Initialize InsightFace App & Saliency Extractor
+# 1. Threaded Camera Capture (Fixes V4L2 Frame Buffering/Bursting on Linux)
+# -----------------------------------------------------------------------------
+class ThreadedCamera:
+    """
+    Runs OpenCV video capture in a dedicated background thread.
+    Constantly flushes hardware camera buffers so the main loop always
+    gets the newest available frame without V4L2 burst delays.
+    """
+    def __init__(self, src=0):
+        self.cap = cv2.VideoCapture(src)
+        if not self.cap.isOpened():
+            sys.exit("Error: Could not open video device.")
+
+        # Attempt buffer size hint
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        self.grabbed, self.frame = self.cap.read()
+        self.stopped = False
+        self.lock = threading.Lock()
+
+        self.thread = threading.Thread(target=self._update, daemon=True)
+        self.thread.start()
+
+    def _update(self):
+        while not self.stopped:
+            grabbed, frame = self.cap.read()
+            if not grabbed:
+                self.stopped = True
+                break
+            with self.lock:
+                self.grabbed = grabbed
+                self.frame = frame
+
+    def read(self):
+        with self.lock:
+            if self.frame is None:
+                return False, None
+            return self.grabbed, self.frame.copy()
+
+    def release(self):
+        self.stopped = True
+        if self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+        self.cap.release()
+
+# -----------------------------------------------------------------------------
+# 2. Initialize InsightFace App & Saliency Extractor
 # -----------------------------------------------------------------------------
 providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider'] if ENABLE_COREML else ['CPUExecutionProvider']
 app = FaceAnalysis(name='buffalo_l', providers=providers)
@@ -80,7 +131,7 @@ def extract_salient_points(frame, num_points=3):
     return points
 
 # -----------------------------------------------------------------------------
-# 2. Motion Detector Class
+# 3. Motion Detector Class
 # -----------------------------------------------------------------------------
 class MotionDetector:
     def __init__(self, min_area=1500, threshold=25):
@@ -130,10 +181,10 @@ class MotionDetector:
         return motion_boxes, motion_centroid
 
 # -----------------------------------------------------------------------------
-# 3. Gaze & Reflex Target Controller (Face > Motion > Saliency)
+# 4. Gaze & Reflex Target Controller with Inhibition-of-Return (Cooldown)
 # -----------------------------------------------------------------------------
 class GazeController:
-    def __init__(self, frame_w, frame_h):
+    def __init__(self, frame_w, frame_h, cooldown_duration=COOLDOWN_DURATION, cooldown_radius=COOLDOWN_RADIUS):
         self.frame_w = frame_w
         self.frame_h = frame_h
         self.salient_targets = []
@@ -151,17 +202,48 @@ class GazeController:
         self.last_glance_time = 0.0
         self.glance_cooldown = 1.5
 
+        # Target Cooldown (Inhibition of Return) variables
+        self.cooldown_duration = cooldown_duration
+        self.cooldown_radius = cooldown_radius
+        self.recent_targets = []  # List of tuples: (x, y, timestamp)
+
+    def _is_in_cooldown(self, point, now):
+        """Checks if a point falls within the spatial radius of any active cooldown zone."""
+        self._prune_expired_cooldowns(now)
+        px, py = point
+        for rx, ry, _ in self.recent_targets:
+            if np.hypot(px - rx, py - ry) <= self.cooldown_radius:
+                return True
+        return False
+
+    def _add_cooldown_zone(self, point, now):
+        """Registers a target location to be suppressed for `cooldown_duration` seconds."""
+        self.recent_targets.append((point[0], point[1], now))
+
+    def _prune_expired_cooldowns(self, now):
+        """Removes cooldown targets older than `cooldown_duration` seconds."""
+        self.recent_targets = [t for t in self.recent_targets if (now - t[2]) < self.cooldown_duration]
+
+    def draw_debug_cooldowns(self, img, now):
+        """Draws active suppression zones on the video frame."""
+        self._prune_expired_cooldowns(now)
+        for rx, ry, ts in self.recent_targets:
+            remaining = self.cooldown_duration - (now - ts)
+            alpha = max(0.2, remaining / self.cooldown_duration)
+            cv2.circle(img, (int(rx), int(ry)), self.cooldown_radius, (0, 0, 200), 1, cv2.LINE_AA)
+
     def update(self, real_face_centers, motion_centroid, salient_points):
         now = time.time()
         self.salient_targets = salient_points
 
-        # Motion Quick Glance Trigger
-        if motion_centroid is not None:
+        # Motion Quick Glance Trigger (Only if not in a cooldown zone)
+        if motion_centroid is not None and not self._is_in_cooldown(motion_centroid, now):
             if not self.in_motion_glance and (now - self.last_glance_time > self.glance_cooldown):
                 self.in_motion_glance = True
                 self.glance_start_time = now
                 self.last_glance_time = now
                 self.target_gaze = list(motion_centroid)
+                self._add_cooldown_zone(motion_centroid, now)
 
         # Handle active motion glance duration
         if self.in_motion_glance:
@@ -175,11 +257,22 @@ class GazeController:
                 self.last_switch_time = now
                 self.hold_duration = random.uniform(1.8, 3.5)
 
-                # Prioritization: 70% chance face, 30% salient point (or fallback if no face)
-                if real_face_centers and random.random() < 0.70:
+                # Filter out candidates that fall inside active cooldown regions
+                valid_salient = [p for p in salient_points if not self._is_in_cooldown(p, now)]
+                valid_faces = [f for f in real_face_centers if not self._is_in_cooldown(f, now)]
+
+                # Prioritization: 70% chance face (if available), 30% salient point (or fallback)
+                if valid_faces and random.random() < 0.70:
+                    chosen = random.choice(valid_faces)
+                    self.target_gaze = list(chosen)
+                    self._add_cooldown_zone(chosen, now)
+                elif valid_salient:
+                    chosen = random.choice(valid_salient)
+                    self.target_gaze = list(chosen)
+                    self._add_cooldown_zone(chosen, now)
+                elif real_face_centers:
+                    # Fallback if all face regions are cooling down
                     self.target_gaze = list(random.choice(real_face_centers))
-                elif self.salient_targets:
-                    self.target_gaze = list(random.choice(self.salient_targets))
                 else:
                     self.target_gaze = [self.frame_w // 2, self.frame_h // 2]
 
@@ -191,7 +284,7 @@ class GazeController:
         return int(self.current_gaze[0]), int(self.current_gaze[1])
 
 # -----------------------------------------------------------------------------
-# 4. Drawing Functions
+# 5. Drawing Functions
 # -----------------------------------------------------------------------------
 def draw_phyzy_eyes(img, gaze_pt, is_glancing=False, eye_radius=48, pupil_radius=20):
     if gaze_pt is None:
@@ -211,7 +304,7 @@ def draw_phyzy_eyes(img, gaze_pt, is_glancing=False, eye_radius=48, pupil_radius
         cv2.circle(img, (eye_center[0] - 4, eye_center[1] - 5), 4, (255, 255, 255), -1)
 
 # -----------------------------------------------------------------------------
-# 5. Load Known Face Database
+# 6. Load Known Face Database
 # -----------------------------------------------------------------------------
 KNOWN_FACES_DIR = "KnownFaces"
 known_db = {}
@@ -235,20 +328,19 @@ if os.path.exists(KNOWN_FACES_DIR):
 RECOGNITION_THRESHOLD = 0.45
 
 # -----------------------------------------------------------------------------
-# 6. Initialize Pygame & Camera Feed
+# 7. Initialize Pygame & Threaded Camera Feed
 # -----------------------------------------------------------------------------
 pygame.init()
 pygame.display.set_caption("PhyzAI Remote Control - Saliency & Vision")
 
-cap = cv2.VideoCapture(0)
-if not cap.isOpened():
-    sys.exit("Error: Could not open video device.")
+camera = ThreadedCamera(0)
 
-# Set hardware buffer size to 1 frame to prevent V4L2 queue bursts on Linux
-cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+# Allow camera driver a moment to initialize frame dimensions
+time.sleep(0.5)
+success, init_frame = camera.read()
 
-frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
-frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+frame_width = init_frame.shape[1] if success and init_frame is not None else 1280
+frame_height = init_frame.shape[0] if success and init_frame is not None else 720
 
 screen = pygame.display.set_mode((frame_width, frame_height))
 clock = pygame.time.Clock()
@@ -259,7 +351,7 @@ gaze_controller = GazeController(frame_width, frame_height)
 print(f"\nVision loop active at {frame_width}x{frame_height}. Press ESC to exit.")
 
 # -----------------------------------------------------------------------------
-# 7. Main Processing Loop
+# 8. Main Processing Loop
 # -----------------------------------------------------------------------------
 running = True
 prev_frame_time = time.time()
@@ -273,16 +365,17 @@ try:
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 running = False
 
-        success, frame = cap.read()
-        if not success:
-            break
+        success, frame = camera.read()
+        if not success or frame is None:
+            time.sleep(0.01)
+            continue
 
         display_frame = frame.copy()
+        now = time.time()
 
         # --- A. Calculate FPS ---
-        new_frame_time = time.time()
-        delta_time = new_frame_time - prev_frame_time
-        prev_frame_time = new_frame_time
+        delta_time = now - prev_frame_time
+        prev_frame_time = now
         fps = 1.0 / delta_time if delta_time > 0 else 0.0
 
         # --- B. Motion Detection ---
@@ -340,7 +433,8 @@ try:
         # --- E. Update Gaze Position ---
         gaze_x, gaze_y = gaze_controller.update(real_face_centers, motion_centroid, salient_points)
 
-        # --- F. Draw Overlay Eyes ---
+        # --- F. Draw Active Cooldown Circles & Overlay Eyes ---
+        gaze_controller.draw_debug_cooldowns(display_frame, now)
         draw_phyzy_eyes(display_frame, (gaze_x, gaze_y), is_glancing=gaze_controller.in_motion_glance)
 
         if gaze_controller.in_motion_glance:
@@ -362,6 +456,6 @@ try:
         clock.tick(30)
 
 finally:
-    cap.release()
+    camera.release()
     pygame.quit()
     sys.exit(0)
