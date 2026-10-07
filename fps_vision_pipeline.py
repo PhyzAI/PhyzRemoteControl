@@ -14,6 +14,12 @@ from insightface.app import FaceAnalysis
 # Prevent Cocoa/Objective-C fork warnings on macOS
 os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 
+# Prevent ONNX Runtime / OpenMP from maxing out all CPU threads on Linux/Intel
+# (Prevents starving Pygame display rendering threads)
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+
 # -----------------------------------------------------------------------------
 # Global Feature Switches
 # -----------------------------------------------------------------------------
@@ -237,6 +243,9 @@ pygame.display.set_caption("PhyzAI Remote Control - Saliency & Vision")
 cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     sys.exit("Error: Could not open video device.")
+
+# Set hardware buffer size to 1 frame to prevent V4L2 queue bursts on Linux
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
 frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
