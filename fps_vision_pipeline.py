@@ -24,10 +24,13 @@ os.environ["OPENBLAS_NUM_THREADS"] = "2"
 # -----------------------------------------------------------------------------
 # Global Feature Switches
 # -----------------------------------------------------------------------------
-ENABLE_SALIENCY = True  # Set to False to disable saliency detection pipeline
-ENABLE_COREML = True    # Set to False on Linux/Intel machines without CoreML support
-FACE_DET_INTERVAL = 4   # Run heavy face recognition every N frames (caching results in between)
-DET_SIZE = (320, 320)   # Reduced detection grid for faster processing
+ENABLE_SALIENCY = True          # Set to False to disable saliency detection pipeline
+ENABLE_COREML = False            # Set to False on Linux/Intel machines without CoreML support
+ENABLE_FACE_DETECTION = True    # Set to False to disable face detection & tracking entirely
+ENABLE_FACE_RECOGNITION = True  # Set to False to disable identity matching against KnownFaces DB
+INSIGHTFACE_MODEL = "buffalo_s" # Options: 'buffalo_s' (fast/lightweight), 'buffalo_l' (heavy/accurate), 'mobileface'
+FACE_DET_INTERVAL = 4           # Run heavy face detection every N frames (caching results in between)
+DET_SIZE = (320, 320)           # Reduced detection grid for faster processing
 
 # Gaze Cooldown Settings (Inhibition of Return)
 COOLDOWN_DURATION = 2.5  # Seconds to ignore a recently selected target region
@@ -82,9 +85,11 @@ class ThreadedCamera:
 # -----------------------------------------------------------------------------
 # 2. Initialize InsightFace App & Saliency Extractor
 # -----------------------------------------------------------------------------
-providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider'] if ENABLE_COREML else ['CPUExecutionProvider']
-app = FaceAnalysis(name='buffalo_l', providers=providers)
-app.prepare(ctx_id=0, det_size=DET_SIZE)
+app = None
+if ENABLE_FACE_DETECTION:
+    providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider'] if ENABLE_COREML else ['CPUExecutionProvider']
+    app = FaceAnalysis(name=INSIGHTFACE_MODEL, providers=providers)
+    app.prepare(ctx_id=0, det_size=DET_SIZE)
 
 # Built-in lightweight Spectral Residual Saliency detector
 saliency_detector = cv2.saliency.StaticSaliencySpectralResidual_create()
@@ -309,7 +314,7 @@ def draw_phyzy_eyes(img, gaze_pt, is_glancing=False, eye_radius=48, pupil_radius
 KNOWN_FACES_DIR = "KnownFaces"
 known_db = {}
 
-if os.path.exists(KNOWN_FACES_DIR):
+if ENABLE_FACE_DETECTION and ENABLE_FACE_RECOGNITION and os.path.exists(KNOWN_FACES_DIR):
     print(f"Loading reference embeddings from '{KNOWN_FACES_DIR}'...")
     for filename in os.listdir(KNOWN_FACES_DIR):
         if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
@@ -389,38 +394,44 @@ try:
             cv2.circle(display_frame, (sx, sy), 8, (255, 0, 255), 1)
             cv2.putText(display_frame, "Salient Point", (sx - 35, sy + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
 
-        # --- D. Face Recognition (Cached every N frames) ---
-        if frame_count % FACE_DET_INTERVAL == 0:
-            faces = app.get(frame)
+        # --- D. Face Detection & Recognition (Cached every N frames) ---
+        if ENABLE_FACE_DETECTION:
+            if frame_count % FACE_DET_INTERVAL == 0:
+                faces = app.get(frame)
+                cached_face_centers = []
+                cached_face_draw_data = []
+
+                for face in faces:
+                    bbox = face.bbox.astype(int)
+                    x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
+                    center_x = (x1 + x2) // 2
+                    center_y = (y1 + y2) // 2
+                    cached_face_centers.append((center_x, center_y))
+
+                    label = "Face"
+                    color = (0, 255, 0)
+
+                    # Identity matching only runs if recognition switch is active
+                    if ENABLE_FACE_RECOGNITION and known_db and face.embedding is not None:
+                        best_score = -1.0
+                        best_name = None
+                        for name, ref_emb in known_db.items():
+                            score = cosine_similarity(face.embedding, ref_emb)
+                            if score > best_score:
+                                best_score = score
+                                best_name = name
+
+                        if best_score >= RECOGNITION_THRESHOLD:
+                            label = f"{best_name} ({best_score:.2f})"
+                            color = (0, 255, 0)
+                        else:
+                            label = f"Unknown ({best_score:.2f})"
+                            color = (0, 165, 255)
+
+                    cached_face_draw_data.append((x1, y1, x2, y2, label, color))
+        else:
             cached_face_centers = []
             cached_face_draw_data = []
-
-            for face in faces:
-                bbox = face.bbox.astype(int)
-                x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
-                center_x = (x1 + x2) // 2
-                center_y = (y1 + y2) // 2
-                cached_face_centers.append((center_x, center_y))
-
-                label = "Unknown"
-                color = (0, 165, 255)
-
-                if known_db and face.embedding is not None:
-                    best_score = -1.0
-                    best_name = None
-                    for name, ref_emb in known_db.items():
-                        score = cosine_similarity(face.embedding, ref_emb)
-                        if score > best_score:
-                            best_score = score
-                            best_name = name
-
-                    if best_score >= RECOGNITION_THRESHOLD:
-                        label = f"{best_name} ({best_score:.2f})"
-                        color = (0, 255, 0)
-                    else:
-                        label = f"Unknown ({best_score:.2f})"
-
-                cached_face_draw_data.append((x1, y1, x2, y2, label, color))
 
         # Render face boxes/labels using cached data on every frame
         real_face_centers = cached_face_centers
