@@ -1,649 +1,990 @@
-# PhyzAI remote control, with face detection
-#
-# Initial Rev, RKD 2024-08
-#
-# NOTE: Make sure you use a virtual environment, not the system python install
-# On PhyzAI, this Venv is "pytorch_venv"
-#   "C:\Users\User\Desktop\PhyzRemoteControl\pytorch_venv"
-#
-#
-# TODO:
-# * Once a named-face is detected, it should stay with that person for a while (ttl)
-# * Prevent switching back to same face.  Always choose a new one.
-# * Add space/location to face detection: if too far from current spot, dump the current name
-# XX Maybe use YOLO for face (well, person) detection as well???  Nope, only does "person", not "face"
-# X Face and ball TTL seem to not be working properly.  Generally works, but seems to switch too soon sometimes.
-# X Face (and ball) time-to-live needs to be refactored.  Put face detect into its own function.  Wrap TTL around that.
-# X Change to FaceNet instead of face_recognition library. The latter doesn't seem to work really well.
-# X Add Face Recognition
-# X Add back the random-faces if found-head-count is less than target head count
-# X Remove camera-on-head (relative motion) code
-# X add calibration offset to head
-# X Add some random head moves, and looking around if no face is detected
-# X Tweak calibration of Phyz head versus image center
-# X Tracked location (red box of a real face) does not exactly match circle drawn (green) 
-# X Pose changes should happen with a different cadence than changing people
-# X Phyz should track a real persons slight movements
-# X Add camera
-# X Detect Faces
-# X Move sort-of randomly to detected faces.
+# PHYZAI New Vision Processing Pipeline
+# with simplified libraries, object detection, and saliency
+# Oct 2026: updated version by TheRFengineer@gmail.com
 
-
-
-# Libraries to install (in a Conda or Virtual Environment)
-#   pip3 install ultralytics
-#   pip install pygame
-#   pip install tensorflow
-#   pip install keras-facenet
-#   pip3 install pyserial # not serial !!!
-#   pip install opencv-python # Comes in with ultralytics???
-#   pip install numpy   # for the display. # Comes in with ultralytics???
-#   put zmaestro.py in same directory as this file
-
-# Also install the Maestro driver and control
-# - https://www.pololu.com/file/0J266/maestro-windows-130422.zip
-# - run Maestro Control Center
-# - in Serial Settings, choose "USB Dual Port"
-# - and choose "Never Sleep"
-
-
-# Info Links
-# Search for Playstation 4 Controller here:
-# https://www.pygame.org/docs/ref/joystick.html 
-#
-# Servo controller "Maestro Mini"
-# https://www.pololu.com/product/1350/resources
-# https://github.com/frc4564/maestro
-
-
-# Enable different basic operations
-
-HOME = False   # At Keith's house
-enable_GUI = True
-enable_MC = True # enable Motor Control
-enable_face_detect = True
-enable_face_recog = True
-enable_ball_detect = True
-enable_show_phyz_loc = True
-enable_randomize_look = False # Look around a little bit for each face
-enable_face_camera = True # Look more straight ahead
-enable_motion_detect = False
-DEBUG_YOLO = False # Show everything YOLO detects
-DEBUG_MTCNN = True # Show everyone MTCNN detects
-
-SAME_FACE_DIST = 10  # If face only physically moves less than this, don't dump the name
-
-likelihood_of_first_face = 30 # percent
-
-num_people = 4  # Number of "people" to include in the scene
-max_real_people = 3
-assert max_real_people <= num_people
-
-FACE_DET_TTL = 60 # was 45 # Hold-time for face detection (in ticks)
-RANDOM_FACE_TTL = 30 # was 80
-
-# Calibration to get the head to face you exactly (hopefully)
-HEAD_OFFSET_X = 0
-HEAD_OFFSET_Y = 0
-
-
-import pygame
-import cv2 
-import numpy as np
 import os
-import re
-import math
+import sys
+import time
+import random
+import threading
+import urllib.request
+import numpy as np
+import cv2  # pip install opencv-contrib-python-headless
+import pygame
+from insightface.app import FaceAnalysis
 
+# Prevent Cocoa/Objective-C fork warnings on macOS
+os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 
- # for Object detection (the green ball attached to the microphone)
-from ultralytics import YOLO 
-# Load a pre-trained YOLO model
-# You can specify "yolov5s.pt" or "yolov8s.pt" (small model versions) or other model sizes for different performance
-#model = YOLO("yolov8n.pt")  # 'n' for nano model, fast and lightweight for real-time detection
-model = YOLO("yolo11s.pt")  # 'n' for nano model, fast and lightweight for real-time detection
-#model = YOLO("/Volumes/Safari/PhyzAI_RemoteControl/runs/detect/train2/weights/best.pt")
+# Prevent ONNX Runtime / OpenMP from maxing out all CPU threads on Linux/Intel
+# (Prevents starving Pygame display rendering threads)
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
 
+# -----------------------------------------------------------------------------
+# Global Feature Switches
+# -----------------------------------------------------------------------------
+ENABLE_SALIENCY = True          # Set to False to disable saliency detection pipeline
+SALIENCY_MODE = "U2NETP"        # Options: 'SPECTRAL_RESIDUAL', 'FINE_GRAINED', 'LAB_COLOR', 'U2NETP'
+NUM_SALIENCY_POINTS = 3         # Number of top salient points to extract per frame
+ENABLE_COREML = False           # Set to False on Linux/Intel machines without CoreML support
+ENABLE_FACE_DETECTION = True    # Set to False to disable face detection & tracking entirely
+ENABLE_FACE_RECOGNITION = True  # Set to False to disable identity matching against KnownFaces DB
+INSIGHTFACE_MODEL = "buffalo_sc" # Options: 'buffalo_sc', 'buffalo_s' (fast/lightweight), 'buffalo_l' (heavy/accurate)
+FACE_DET_INTERVAL = 4           # Run heavy face detection every N frames (caching results in between)
+DET_SIZE = (320, 320)           # Reduced detection grid for faster processing
 
-# for Face Detection (not Facial Recognition / Identification)
-from mtcnn import MTCNN
-from mtcnn.utils.images import load_image
-from mtcnn.utils.plotting import plot
+# Object Detection Settings
+ENABLE_OBJECT_DETECTION = True   # Set to False to disable object detection
+OBJECT_DETECTOR_MODE = "YOLOV8N" # Options: 'YOLOV8N', 'MOBILENET_SSD', 'MEDIAPIPE'
+OBJ_DET_INTERVAL = 3            # Run object detection every N frames (caching results)
+OBJ_CONF_THRESHOLD = 0.40       # Confidence score threshold for valid object detections
 
+# Motor Control Settings (Maestro Servo Controller)
+ENABLE_MC = False               # Set to True to enable Pololu Maestro physical servo movement
+HOME_LOCATION = False           # Set to True for COM3 (home), False for COM5 (Phyz)
+HEAD_OFFSET_X = 0               # Calibration offset X
+HEAD_OFFSET_Y = 0               # Calibration offset Y
 
-# for Face Recognition (instead of just Face Detection)
-from keras_facenet import FaceNet
-embedder = FaceNet()
+# Gaze Cooldown Settings (Inhibition of Return)
+COOLDOWN_DURATION = 2.5  # Seconds to ignore a recently selected target region
+COOLDOWN_RADIUS = 120    # Radius in pixels around recent target points to ignore
 
-
-# Choose correct com-port and device
-if enable_MC:
-    import zmaestro as maestro
-    if HOME:
-        servo = maestro.Controller('COM3', device=2)  # Keith @ home; Check COM port in Windows Device Manager
-    else:
-        servo = maestro.Controller('COM5', device=1)  # Phyz; Check COM port in Windows Device Manager
-
-
-
-# Servo Definitions
-
-head_x_channel = 1   # Determine what these actually are on Phyz's Maestro board with Maestro Control Center
+# -----------------------------------------------------------------------------
+# 0b. Motor Control (Pololu Maestro Servo Controller)
+# -----------------------------------------------------------------------------
+servo = None
+head_x_channel = 1
 head_y_channel = 0
 head_tilt_channel = 2
 arm_left_channel = 4
 arm_right_channel = 3
 
-# Get these from real PhyzAI Maestro board.  The *4 is because Maestro Control Center and the interface
-# code define the ranges at a different scale
-head_x_range = (1520*4, 1620*4, 1728*4) # head left/right
-head_y_range = (735*4, 936*4, 1136*4) # head up / down
-head_tilt_range = (1237*4, 1337*4, 1437*4) 
-arm_right_range = (775*4, 775*4, 2532*4) 
-arm_left_range = (1100*4, 1100*4, 1885*4)
-        
+head_x_range = (1520 * 4, 1620 * 4, 1728 * 4)  # min, nominal, max
+head_y_range = (735 * 4, 936 * 4, 1136 * 4)
+head_tilt_range = (1237 * 4, 1337 * 4, 1437 * 4)
+arm_right_range = (775 * 4, 775 * 4, 2532 * 4)
+arm_left_range = (1100 * 4, 1100 * 4, 1885 * 4)
 
-
-
-class Person:
-    def __init__(self, x_pos = 0, y_pos = 0, face_region = [], name="", time_to_live=0):
-        self.x_pos = x_pos
-        self.y_pos = y_pos
-        self.face_region = face_region
-        self.name = name
-        self.time_to_live = time_to_live
-
-
-
-##################
-# Functions
-##################
-
-def draw_face_boxes(frame, boxes, probs):
-        """ Draw a box for each face detected """
-        if boxes is None:
-            pass
-        else:
-            for box, prob in zip(boxes, probs): #, landmarks):
-                cv2.rectangle(frame,
-                                (int(box[0]), int(box[1])),
-                                (int(box[2]), int(box[3])),
-                                (0, 0, 255),
-                                thickness=2)
-                # Show probability
-                cv2.putText(frame, str(
-                    round(prob,2)), (int(box[2]), int(box[3])), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
-                #draw_person_loc(frame,int((box[0]+box[2])//2), int((box[1]+box[3])//2), (100,0,0))
-                #print(box)
-        return frame
-
-
-def draw_person_loc(image, pos_x, pos_y, face_name = "unknown", color = (0, 200, 0)):
-    """ Draw an oval where each face is located """
-    axesLength = (20, 40) 
-    startAngle = 0
-    endAngle = 360
-    thickness = 3
-    angle = 0
-    if face_name == "<random>":
-        color = (200, 200, 0)
-    cv2.ellipse(image, (pos_x, pos_y), axesLength, 
-           angle, startAngle, endAngle, color, thickness)
-    cv2.putText(image, face_name, (pos_x-15, pos_y+65), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
-    return image
-
-
-
-def draw_phyz_position(image, pos_x, pos_y, angle=0, left_arm=0, right_arm=0, note=""): 
-    """ Draw an image of the current head and arm positions (in screen-units, not ideal units) """
-
-    # Ellipse for the head
-    axesLength = (50, 100) 
-    startAngle = 0
-    endAngle = 360
-    color = (255, 0, 0) 
-    thickness = 5
-    cv2.ellipse(image, (pos_x, pos_y), axesLength, 
-           angle, startAngle, endAngle, color, thickness)
-    
-    # Ellipse of left arm
-    #left_arm = max(left_arm, 0)
-    axesLength = (10, max(int(50-40*left_arm),0)) 
-    startAngle = 0
-    endAngle = 360
-    color = (255, 0, 0) 
-    thickness = 4
-    cv2.ellipse(image, (pos_x-70, pos_y+40-int(40*left_arm)), axesLength, 
-           0, startAngle, endAngle, color, thickness)
-    
-    # Ellipse of right arm
-    #right_arm = max(right_arm, 0)
-    axesLength = (10, max(int(50-40*right_arm),0)) 
-    startAngle = 0
-    endAngle = 360
-    color = (255, 0, 0) 
-    thickness = 5
-    cv2.ellipse(image, (pos_x+70, pos_y+40-int(40*right_arm)), axesLength, 
-           0, startAngle, endAngle, color, thickness)
-        
-    cv2.putText(image, note, (pos_x-45, pos_y+130), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
-
-    return image
-  
-
-def choose_people_locations(num_people = 5, force_zero =  True):
-    """return a list of people, where each pair shows percentage of total range available"""
-    people_list = []
-    for i in range(num_people):
-        people_list.append(choose_person_location(i, force_zero))
-    return people_list
-     
-def choose_person_location(location, force_zero =  True):
-    """return a person"""
-    side = 2*(location % 2) - 1  # -1 or +1
-    this_x = np.random.randint(20,80) * side
-    this_y = np.random.randint(-25,25)
-    if force_zero and location == 0:
-        new_person = Person(0,0, [], "<random>", RANDOM_FACE_TTL)
-    else:
-        new_person = Person(this_x, this_y, [], "<random>", RANDOM_FACE_TTL)
-    return new_person
-
-def get_screen_position(person_loc = [0,0], move_scale = 1.0):
-    """ Translate Ideal person location to point on the screen """
-    x_pos = person_loc[0]
-    y_pos = person_loc[1]
-
-    x_box_mid = int(move_scale * image_size_x*(x_pos + 100)/200)
-    y_box_mid = int(move_scale * image_size_y*(y_pos + 100)/200)
-                
-    return(x_box_mid,y_box_mid)
-
-
-#################
-# Motor Control 
-#################
+if ENABLE_MC:
+    try:
+        import zmaestro as maestro
+        com_port = 'COM3' if HOME_LOCATION else 'COM5'
+        device_id = 2 if HOME_LOCATION else 1
+        servo = maestro.Controller(com_port, device=device_id)
+        print(f"Successfully connected to Maestro Controller on {com_port} (device={device_id})")
+    except Exception as e:
+        print(f"Warning: Could not initialize Maestro Controller: {e}")
+        ENABLE_MC = False
 
 def set_head_to_nominal():
-    servo.setTarget(head_x_channel, head_x_range[1])
-    servo.setTarget(head_y_channel, head_y_range[1])
-    servo.setTarget(head_tilt_channel, head_tilt_range[1])
-    servo.setTarget(arm_left_channel, arm_left_range[1])
-    servo.setTarget(arm_right_channel, arm_right_range[1])
+    """Sets all physical head and arm servos to neutral home position."""
+    if ENABLE_MC and servo is not None:
+        try:
+            servo.setTarget(head_x_channel, head_x_range[1])
+            servo.setTarget(head_y_channel, head_y_range[1])
+            servo.setTarget(head_tilt_channel, head_tilt_range[1])
+            servo.setTarget(arm_left_channel, arm_left_range[1])
+            servo.setTarget(arm_right_channel, arm_right_range[1])
+        except Exception as e:
+            print(f"Error setting nominal servo position: {e}")
 
-
-def move_physical_position(person_loc=[0,0], angle=0, left_arm=0, right_arm=0, move_relative=False, move_scale=1.0):
+def move_physical_position(person_loc=(0, 0), angle=0, left_arm=0, right_arm=0, move_scale=1.0):
     """
-    Translate Ideal person location and head/arms to physical position.
-    * Ideal is based on a -100 to +100 in x and y dimensions.
+    Translates normalized target coordinate (-100 to +100) and pose parameters to Maestro servo targets.
     """
+    if not ENABLE_MC or servo is None:
+        return
 
-    # Get actual camera (head) position
-    head_x = servo.getPosition(head_x_channel)  #FIXME: Convert this to Ideal-plane 
-    head_x = (head_x - (head_x_range[0])) / (head_x_range[2]-head_x_range[0])
-    head_x = head_x * 200 - 100
-    head_y = servo.getPosition(head_y_channel)
-    head_y = (head_y - (head_y_range[0])) / (head_y_range[2]-head_y_range[0])
-    head_y = head_y * 200 - 100
-
-    if move_relative:
-        x_loc = person_loc[0] - head_x
-        y_loc = person_loc[1] - head_y
-    else:
+    try:
         x_loc = person_loc[0] - HEAD_OFFSET_X
         y_loc = person_loc[1] - HEAD_OFFSET_Y
 
-    x_scale = int(move_scale*(head_x_range[2] - head_x_range[0])/2 )
-    y_scale = int(move_scale*(head_y_range[2] - head_y_range[0])/2 )
-    x_pos = int(head_x_range[1] + x_loc*x_scale/100)   # FIXME: should head_x_range[1] be the subtraction 2 lines up???
-    y_pos = int(head_y_range[1] + y_loc*y_scale/100)
+        x_scale = int(move_scale * (head_x_range[2] - head_x_range[0]) / 2)
+        y_scale = int(move_scale * (head_y_range[2] - head_y_range[0]) / 2)
+        x_pos = int(head_x_range[1] + x_loc * x_scale / 100)
+        y_pos = int(head_y_range[1] + y_loc * y_scale / 100)
 
-    angle_scale = int((head_tilt_range[2] - head_tilt_range[0])/2)
-    head_pos = int(head_tilt_range[1] + angle*angle_scale/45)
+        angle_scale = int((head_tilt_range[2] - head_tilt_range[0]) / 2)
+        head_pos = int(head_tilt_range[1] + angle * angle_scale / 45)
 
-    arm_left_scale = (arm_left_range[2] - arm_left_range[0])
-    arm_right_scale = (arm_right_range[2] - arm_right_range[0])
-    arm_left_pos = int(arm_left_range[0] + left_arm*arm_left_scale)
-    arm_right_pos = int(arm_right_range[0] + right_arm*arm_right_scale)
+        arm_left_scale = (arm_left_range[2] - arm_left_range[0])
+        arm_right_scale = (arm_right_range[2] - arm_right_range[0])
+        arm_left_pos = int(arm_left_range[0] + left_arm * arm_left_scale)
+        arm_right_pos = int(arm_right_range[0] + right_arm * arm_right_scale)
 
-    servo.setTarget(head_x_channel, x_pos)
-    servo.setTarget(head_y_channel, y_pos)
-    servo.setTarget(head_tilt_channel, head_pos)
-    servo.setTarget(arm_left_channel, arm_left_pos)
-    servo.setTarget(arm_right_channel, arm_right_pos)
+        servo.setTarget(head_x_channel, x_pos)
+        servo.setTarget(head_y_channel, y_pos)
+        servo.setTarget(head_tilt_channel, head_pos)
+        servo.setTarget(arm_left_channel, arm_left_pos)
+        servo.setTarget(arm_right_channel, arm_right_pos)
+    except Exception as e:
+        print(f"Error executing physical motor command: {e}")
 
-    return
+# -----------------------------------------------------------------------------
+# 1. Threaded Camera Capture (Fixes V4L2 Frame Buffering/Bursting on Linux)
+# -----------------------------------------------------------------------------
+class ThreadedCamera:
+    """
+    Runs OpenCV video capture in a dedicated background thread.
+    Constantly flushes hardware camera buffers so the main loop always
+    gets the newest available frame without V4L2 burst delays.
+    """
+    def __init__(self, src=0):
+        self.cap = cv2.VideoCapture(src)
+        if not self.cap.isOpened():
+            sys.exit("Error: Could not open video device.")
 
+        # Attempt buffer size hint
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-##################
-# More Functions #
-##################
+        self.grabbed, self.frame = self.cap.read()
+        self.stopped = False
+        self.lock = threading.Lock()
 
-def get_pos_from_box(box):
-    # Pos is defined in a (-100, 100), (-100, 100) dimensionless space, just for phyz
-    # Box is defined (from cv2) as (minx, miny, maxx, maxy)
-    x_box_mid = int((box[0]+box[2])/2)
-    y_box_mid = int((box[1]+box[3])/2)
-    x_pos = (x_box_mid/image_size_x) * 200 - 100
-    y_pos = (y_box_mid/image_size_y) * 200 - 100
-    return (x_pos, y_pos)
+        self.thread = threading.Thread(target=self._update, daemon=True)
+        self.thread.start()
 
+    def _update(self):
+        while not self.stopped:
+            grabbed, frame = self.cap.read()
+            if not grabbed:
+                self.stopped = True
+                break
+            with self.lock:
+                self.grabbed = grabbed
+                self.frame = frame
 
-def generate_encodings_from_dir(directory):
-    """Scan for jpg files in a directory.  Generate a list of encodings for Facial Recognition"""
-    #face_encodings = []
-    #face_names = []
-    known_faces = []
-    for file in os.listdir(directory):
-        if file.endswith(".jpg"):
-            file_path = os.path.join(directory, file)
+    def read(self):
+        with self.lock:
+            if self.frame is None:
+                return False, None
+            return self.grabbed, self.frame.copy()
 
-            #target_image = face_recognition.load_image_file(file_path)
-            target_image = cv2.imread(file_path)
-            if target_image is not None:
-                target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
+    def release(self):
+        self.stopped = True
+        if self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+        self.cap.release()
+
+# -----------------------------------------------------------------------------
+# 2. Initialize InsightFace App & Saliency Extractor
+# -----------------------------------------------------------------------------
+app = None
+if ENABLE_FACE_DETECTION:
+    providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider'] if ENABLE_COREML else ['CPUExecutionProvider']
+    app = FaceAnalysis(name=INSIGHTFACE_MODEL, providers=providers)
+    app.prepare(ctx_id=0, det_size=DET_SIZE)
+
+# Saliency Detectors Setup
+saliency_detector = None
+u2netp_net = None
+
+if ENABLE_SALIENCY:
+    if SALIENCY_MODE == "SPECTRAL_RESIDUAL":
+        saliency_detector = cv2.saliency.StaticSaliencySpectralResidual_create()
+    elif SALIENCY_MODE == "FINE_GRAINED":
+        saliency_detector = cv2.saliency.StaticSaliencyFineGrained_create()
+    elif SALIENCY_MODE == "U2NETP":
+        # Attempts to load u2netp.onnx if present; falls back to FINE_GRAINED if missing
+        if os.path.exists("u2netp.onnx"):
+            u2netp_net = cv2.dnn.readNetFromONNX("u2netp.onnx")
+            print("Successfully loaded U-2-Net-p ONNX model.")
+        else:
+            print("Warning: 'u2netp.onnx' not found in working directory. Falling back to FINE_GRAINED saliency.")
+            saliency_detector = cv2.saliency.StaticSaliencyFineGrained_create()
+            SALIENCY_MODE = "FINE_GRAINED"
+
+def cosine_similarity(emb1, emb2):
+    """Calculates cosine similarity between two normalized feature vectors."""
+    return float(np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2)))
+
+def extract_salient_points(frame, num_points=NUM_SALIENCY_POINTS):
+    """
+    Computes saliency map using the chosen algorithm and extracts top peak interest locations.
+    Supported modes: 'SPECTRAL_RESIDUAL', 'FINE_GRAINED', 'LAB_COLOR', 'U2NETP'
+    """
+    if not ENABLE_SALIENCY:
+        return []
+
+    h, w = frame.shape[:2]
+    small_frame = cv2.resize(frame, (160, 90))
+    sal_map = None
+
+    if SALIENCY_MODE in ("SPECTRAL_RESIDUAL", "FINE_GRAINED"):
+        if saliency_detector is not None:
+            success, sal_map = saliency_detector.computeSaliency(small_frame)
+            if success:
+                sal_map = (sal_map * 255).astype(np.uint8)
+
+    elif SALIENCY_MODE == "LAB_COLOR":
+        # Center-surround color/luminance contrast map in CIELAB color space
+        lab = cv2.cvtColor(small_frame, cv2.COLOR_BGR2LAB).astype(np.float32)
+        l, a, b = cv2.split(lab)
+        l_blur = cv2.GaussianBlur(l, (21, 21), 0)
+        a_blur = cv2.GaussianBlur(a, (21, 21), 0)
+        b_blur = cv2.GaussianBlur(b, (21, 21), 0)
+        
+        diff_l = cv2.absdiff(l, l_blur)
+        diff_a = cv2.absdiff(a, a_blur)
+        diff_b = cv2.absdiff(b, b_blur)
+        
+        combined = diff_l * 0.4 + diff_a * 0.3 + diff_b * 0.3
+        sal_map = cv2.normalize(combined, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    elif SALIENCY_MODE == "U2NETP" and u2netp_net is not None:
+        # Lightweight U-2-Net-p neural saliency inference
+        blob = cv2.dnn.blobFromImage(small_frame, 1.0/255.0, (160, 160), (0.485, 0.456, 0.406), swapRB=True)
+        u2netp_net.setInput(blob)
+        out = u2netp_net.forward()
+        sal_out = out[0][0]
+        sal_out = cv2.resize(sal_out, (160, 90))
+        sal_map = cv2.normalize(sal_out, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    if sal_map is None:
+        return []
+
+    # Threshold map to find highest contrast/interest regions
+    _, thresh = cv2.threshold(sal_map, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    points = []
+    scale_x = w / 160.0
+    scale_y = h / 90.0
+
+    # Sort contours by area to find distinct visual regions
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+    for c in contours[:num_points]:
+        M = cv2.moments(c)
+        if M["m00"] != 0:
+            cx = int((M["m10"] / M["m00"]) * scale_x)
+            cy = int((M["m01"] / M["m00"]) * scale_y)
+            points.append((cx, cy))
+
+    return points
+
+# -----------------------------------------------------------------------------
+# 3. Motion Detector Class
+# -----------------------------------------------------------------------------
+class MotionDetector:
+    def __init__(self, min_area=1500, threshold=25):
+        self.prev_frame = None
+        self.min_area = min_area
+        self.threshold = threshold
+
+    def process(self, frame):
+        small_frame = cv2.resize(frame, (320, 180))
+        gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (21, 21), 0)
+
+        if self.prev_frame is None:
+            self.prev_frame = gray
+            return [], None
+
+        frame_delta = cv2.absdiff(self.prev_frame, gray)
+        thresh = cv2.threshold(frame_delta, self.threshold, 255, cv2.THRESH_BINARY)[1]
+        thresh = cv2.dilate(thresh, None, iterations=2)
+
+        self.prev_frame = gray
+
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        motion_boxes = []
+        total_x, total_y, total_count = 0, 0, 0
+
+        scale_x = frame.shape[1] / 320.0
+        scale_y = frame.shape[0] / 180.0
+
+        for c in contours:
+            if cv2.contourArea(c) < (self.min_area / (scale_x * scale_y)):
+                continue
+            
+            x, y, w, h = cv2.boundingRect(c)
+            full_box = (int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y))
+            motion_boxes.append(full_box)
+
+            total_x += full_box[0] + full_box[2] // 2
+            total_y += full_box[1] + full_box[3] // 2
+            total_count += 1
+
+        motion_centroid = None
+        if total_count > 0:
+            motion_centroid = (int(total_x / total_count), int(total_y / total_count))
+
+        return motion_boxes, motion_centroid
+
+# -----------------------------------------------------------------------------
+# 3b. Object Detector Class (YOLOv8n / MobileNet-SSD / MediaPipe)
+# -----------------------------------------------------------------------------
+COCO_CLASSES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
+    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard",
+    "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
+    "scissors", "teddy bear", "hair drier", "toothbrush"
+]
+
+VOC_CLASSES = [
+    "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair",
+    "cow", "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"
+]
+
+class ObjectDetector:
+    def __init__(self, mode=OBJECT_DETECTOR_MODE, conf_thresh=OBJ_CONF_THRESHOLD):
+        self.mode = mode
+        self.conf_thresh = conf_thresh
+        self.net = None
+        self.yolo_model = None
+        self.mp_detector = None
+        self.status_msg = "Initializing"
+
+        if not ENABLE_OBJECT_DETECTION:
+            self.status_msg = "Disabled"
+            return
+
+        if self.mode == "YOLOV8N":
+            # First try loading ultralytics library if installed (auto-downloads yolov8n.pt)
+            try:
+                from ultralytics import YOLO
+                self.yolo_model = YOLO("yolov8n.pt")
+                self.status_msg = "YOLOv8n (PyTorch)"
+                print("Loaded Ultralytics YOLOv8n object detection model.")
+            except Exception:
+                # Fall back to OpenCV ONNX runtime with reliable HuggingFace download link
+                onnx_path = "yolov8n.onnx"
+                if not os.path.exists(onnx_path):
+                    print("Downloading missing 'yolov8n.onnx' weights from mirror...")
+                    urls = [
+                        "https://huggingface.co/Xuban/yolo_weights_database/resolve/main/yolov8n.onnx",
+                        "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n.onnx"
+                    ]
+                    for url in urls:
+                        try:
+                            urllib.request.urlretrieve(url, onnx_path)
+                            if os.path.exists(onnx_path) and os.path.getsize(onnx_path) > 1000000:
+                                print("Successfully downloaded 'yolov8n.onnx'.")
+                                break
+                        except Exception as e:
+                            print(f"Download attempt failed from {url}: {e}")
+
+                if os.path.exists(onnx_path) and os.path.getsize(onnx_path) > 1000000:
+                    try:
+                        self.net = cv2.dnn.readNetFromONNX(onnx_path)
+                        self.status_msg = "YOLOv8n (OpenCV ONNX)"
+                        print("Loaded YOLOv8n ONNX object detection model into OpenCV DNN.")
+                    except Exception as e:
+                        print(f"Error loading yolov8n.onnx: {e}")
+                        self.status_msg = "ONNX Load Error"
+                else:
+                    self.status_msg = "YOLOv8 Model Missing"
+                    print("Warning: YOLOv8 weights missing. Install 'ultralytics' (pip install ultralytics) or check network connectivity.")
+
+        elif self.mode == "MOBILENET_SSD":
+            proto = "MobileNetSSD_deploy.prototxt"
+            model = "MobileNetSSD_deploy.caffemodel"
+            
+            # Auto-download MobileNet-SSD if missing
+            if not (os.path.exists(proto) and os.path.exists(model)):
+                print("Downloading missing MobileNet-SSD models...")
+                try:
+                    urllib.request.urlretrieve("https://raw.githubusercontent.com/robmarkcole/object-detection-app/master/model/MobileNetSSD_deploy.prototxt.txt", proto)
+                    urllib.request.urlretrieve("https://raw.githubusercontent.com/robmarkcole/object-detection-app/master/model/MobileNetSSD_deploy.caffemodel", model)
+                except Exception as e:
+                    print(f"Failed downloading MobileNet-SSD: {e}")
+
+            if os.path.exists(proto) and os.path.exists(model):
+                try:
+                    if hasattr(cv2.dnn, 'readNetFromCaffe'):
+                        self.net = cv2.dnn.readNetFromCaffe(proto, model)
+                    else:
+                        self.net = cv2.dnn.readNet(model, proto)
+                    self.status_msg = "MobileNet-SSD (Caffe)"
+                    print("Loaded MobileNet-SSD Caffe model.")
+                except Exception as e:
+                    print(f"Error loading MobileNet-SSD: {e}")
+                    self.status_msg = "MobileNet Load Error"
             else:
+                self.status_msg = "MobileNet Model Missing"
+
+        elif self.mode == "MEDIAPIPE":
+            model_file = "efficientdet_lite0.tflite"
+            if not os.path.exists(model_file):
+                try:
+                    print("Downloading MediaPipe EfficientDet model...")
+                    urllib.request.urlretrieve("https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite", model_file)
+                except Exception as e:
+                    print(f"Failed downloading efficientdet_lite0.tflite: {e}")
+
+            try:
+                import mediapipe as mp
+                self.mp_module = mp
+                if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'object_detection'):
+                    self.mp_object_detection = mp.solutions.object_detection
+                    self.mp_detector = self.mp_object_detection.ObjectDetection(
+                        model_selection=0, min_detection_confidence=self.conf_thresh
+                    )
+                    self.status_msg = "MediaPipe Solutions"
+                    print("Initialized MediaPipe Object Detector via solutions.")
+                elif os.path.exists(model_file):
+                    from mediapipe.tasks import python
+                    from mediapipe.tasks.python import vision
+                    base_options = python.BaseOptions(model_asset_path=model_file)
+                    options = vision.ObjectDetectorOptions(base_options=base_options, score_threshold=self.conf_thresh)
+                    self.mp_detector = vision.ObjectDetector.create_from_options(options)
+                    self.status_msg = "MediaPipe Tasks"
+                    print("Initialized MediaPipe Tasks Object Detector.")
+                else:
+                    self.status_msg = "MediaPipe Model Missing"
+            except Exception as e:
+                print(f"Warning: Could not initialize MediaPipe detector: {e}")
+                self.status_msg = "MediaPipe Init Failed"
+
+    def detect(self, frame):
+        """
+        Runs object detection on frame.
+        Returns list of dicts: [{'label': str, 'score': float, 'box': (x,y,w,h), 'center': (cx, cy)}]
+        """
+        if not ENABLE_OBJECT_DETECTION:
+            return []
+
+        h, w = frame.shape[:2]
+        results = []
+
+        if self.mode == "YOLOV8N":
+            if self.yolo_model is not None:
+                preds = self.yolo_model(frame, verbose=False, conf=self.conf_thresh)[0]
+                for box in preds.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                    score = float(box.conf[0].cpu().numpy())
+                    cls_id = int(box.cls[0].cpu().numpy())
+                    label_name = preds.names[cls_id] if cls_id in preds.names else "object"
+                    bw, bh = x2 - x1, y2 - y1
+                    results.append({
+                        'label': label_name,
+                        'score': score,
+                        'box': (x1, y1, bw, bh),
+                        'center': (x1 + bw // 2, y1 + bh // 2)
+                    })
+            elif self.net is not None:
+                # Prepare 640x640 letterbox/square blob for standard YOLOv8 ONNX models
+                blob = cv2.dnn.blobFromImage(frame, 1.0/255.0, (640, 640), swapRB=True, crop=False)
+                self.net.setInput(blob)
+                preds = self.net.forward()
+
+                # Transpose output tensor from (1, 84, 8400) to (8400, 84)
+                outputs = np.squeeze(preds[0])
+                if outputs.shape[0] == 84 and outputs.shape[1] > 84:
+                    outputs = outputs.T
+
+                boxes, confidences, class_ids = [], [], []
+                scale_x, scale_y = w / 640.0, h / 640.0
+
+                for row in outputs:
+                    scores = row[4:]
+                    class_id = np.argmax(scores)
+                    max_score = float(scores[class_id])
+                    if max_score >= self.conf_thresh:
+                        cx, cy, bw, bh = row[0:4]
+                        x = int((cx - bw / 2.0) * scale_x)
+                        y = int((cy - bh / 2.0) * scale_y)
+                        bw_scaled = int(bw * scale_x)
+                        bh_scaled = int(bh * scale_y)
+
+                        boxes.append([x, y, bw_scaled, bh_scaled])
+                        confidences.append(max_score)
+                        class_ids.append(class_id)
+
+                if len(boxes) > 0:
+                    indices = cv2.dnn.NMSBoxes(boxes, confidences, self.conf_thresh, 0.4)
+                    if len(indices) > 0:
+                        for idx in indices.flatten():
+                            x, y, bw, bh = boxes[idx]
+                            cid = class_ids[idx]
+                            label_name = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"obj_{cid}"
+                            results.append({
+                                'label': label_name,
+                                'score': confidences[idx],
+                                'box': (x, y, bw, bh),
+                                'center': (x + bw // 2, y + bh // 2)
+                            })
+
+        elif self.mode == "MOBILENET_SSD" and self.net is not None:
+            blob = cv2.dnn.blobFromImage(cv2.resize(frame, (300, 300)), 0.007843, (300, 300), 127.5)
+            self.net.setInput(blob)
+            detections = self.net.forward()
+
+            for i in range(detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                if confidence > self.conf_thresh:
+                    idx = int(detections[0, 0, i, 1])
+                    box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                    x1, y1, x2, y2 = box.astype("int")
+                    bw, bh = x2 - x1, y2 - y1
+                    label_name = VOC_CLASSES[idx] if idx < len(VOC_CLASSES) else "object"
+                    results.append({
+                        'label': label_name,
+                        'score': float(confidence),
+                        'box': (x1, y1, bw, bh),
+                        'center': (x1 + bw // 2, y1 + bh // 2)
+                    })
+
+        elif self.mode == "MEDIAPIPE" and self.mp_detector is not None:
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if hasattr(self.mp_detector, 'process'):
+                mp_results = self.mp_detector.process(rgb_frame)
+                if mp_results and mp_results.detections:
+                    for detection in mp_results.detections:
+                        bbox = detection.location_data.relative_bounding_box
+                        x1 = int(bbox.xmin * w)
+                        y1 = int(bbox.ymin * h)
+                        bw = int(bbox.width * w)
+                        bh = int(bbox.height * h)
+                        score = detection.score[0]
+                        label_name = "object"
+                        if detection.label:
+                            label_name = detection.label[0]
+                        results.append({
+                            'label': label_name,
+                            'score': float(score),
+                            'box': (x1, y1, bw, bh),
+                            'center': (x1 + bw // 2, y1 + bh // 2)
+                        })
+            elif hasattr(self.mp_detector, 'detect'):
+                mp_image = self.mp_module.Image(image_format=self.mp_module.ImageFormat.SRGB, data=rgb_frame)
+                detection_result = self.mp_detector.detect(mp_image)
+                if detection_result and detection_result.detections:
+                    for detection in detection_result.detections:
+                        bbox = detection.bounding_box
+                        x1 = int(bbox.origin_x)
+                        y1 = int(bbox.origin_y)
+                        bw = int(bbox.width)
+                        bh = int(bbox.height)
+                        category = detection.categories[0]
+                        label_name = category.category_name if category.category_name else "object"
+                        score = category.score
+                        results.append({
+                            'label': label_name,
+                            'score': float(score),
+                            'box': (x1, y1, bw, bh),
+                            'center': (x1 + bw // 2, y1 + bh // 2)
+                        })
+
+        # Filter out 'person' class so face detection exclusively handles people tracking
+        results = [obj for obj in results if obj['label'].lower() != 'person']
+
+        return results
+
+# -----------------------------------------------------------------------------
+# 4. Gaze & Reflex Target Controller with Inhibition-of-Return (Cooldown)
+# -----------------------------------------------------------------------------
+class GazeController:
+    def __init__(self, frame_w, frame_h, cooldown_duration=COOLDOWN_DURATION, cooldown_radius=COOLDOWN_RADIUS):
+        self.frame_w = frame_w
+        self.frame_h = frame_h
+        self.salient_targets = []
+        
+        # Smooth gaze tracking variables
+        self.current_gaze = [frame_w // 2, frame_h // 2]
+        self.target_gaze = [frame_w // 2, frame_h // 2]
+        self.active_target_type = "IDLE"  # Track target type ("FACE", "OBJECT", "SALIENT", "MOTION", "IDLE")
+        self.last_switch_time = time.time()
+        self.hold_duration = 2.5
+
+        # Motion & Novel Object Quick-Glance Reflex state
+        self.in_motion_glance = False
+        self.glance_start_time = 0.0
+        self.glance_duration = 0.7
+        self.last_glance_time = 0.0
+        self.glance_cooldown = 1.5
+        self.glance_label = "MOTION"
+
+        # Target Cooldown (Inhibition of Return) variables
+        self.cooldown_duration = cooldown_duration
+        self.cooldown_radius = cooldown_radius
+        self.recent_targets = []  # List of tuples: (x, y, timestamp)
+
+        # Object Memory for tracking novel objects: [(cx, cy, label, timestamp)]
+        self.known_objects = []
+
+    def _is_in_cooldown(self, point, now):
+        """Checks if a point falls within the spatial radius of any active cooldown zone."""
+        self._prune_expired_cooldowns(now)
+        px, py = point
+        for rx, ry, _ in self.recent_targets:
+            if np.hypot(px - rx, py - ry) <= self.cooldown_radius:
+                return True
+        return False
+
+    def _add_cooldown_zone(self, point, now):
+        """Registers a target location to be suppressed for `cooldown_duration` seconds."""
+        self.recent_targets.append((point[0], point[1], now))
+
+    def _prune_expired_cooldowns(self, now):
+        """Removes cooldown targets older than `cooldown_duration` seconds."""
+        self.recent_targets = [t for t in self.recent_targets if (now - t[2]) < self.cooldown_duration]
+
+    def draw_debug_cooldowns(self, img, now):
+        """Draws active suppression zones on the video frame."""
+        self._prune_expired_cooldowns(now)
+        for rx, ry, ts in self.recent_targets:
+            remaining = self.cooldown_duration - (now - ts)
+            alpha = max(0.2, remaining / self.cooldown_duration)
+            cv2.circle(img, (int(rx), int(ry)), self.cooldown_radius, (0, 0, 200), 1, cv2.LINE_AA)
+
+    def update(self, real_face_centers, motion_centroid, salient_points, object_detections=None):
+        now = time.time()
+        self.salient_targets = salient_points
+
+        # Process incoming object detections & track novelty
+        object_centers = []
+        novel_object_center = None
+        novel_object_label = None
+
+        # Clean old object memory (forget objects not seen for 10 seconds)
+        self.known_objects = [o for o in self.known_objects if (now - o[3]) < 10.0]
+
+        if object_detections:
+            for obj in object_detections:
+                if isinstance(obj, dict):
+                    cx, cy = obj['center']
+                    label = obj.get('label', 'object')
+                else:
+                    cx, cy = obj
+                    label = 'object'
+
+                object_centers.append((cx, cy))
+
+                # Check if this object is already in spatial memory
+                is_known = False
+                for idx, (kx, ky, klabel, kts) in enumerate(self.known_objects):
+                    if np.hypot(cx - kx, cy - ky) < 90:  # Matches existing known position
+                        is_known = True
+                        self.known_objects[idx] = (cx, cy, label, now)  # Refresh timestamp & center
+                        break
+
+                if not is_known:
+                    # Register new novel object in memory
+                    self.known_objects.append((cx, cy, label, now))
+                    if novel_object_center is None and not self._is_in_cooldown((cx, cy), now):
+                        novel_object_center = (cx, cy)
+                        novel_object_label = label
+
+        # Reflex Glance Trigger: Quick Orienting Glance for Motion OR Newly Appearing Objects
+        if not self.in_motion_glance and (now - self.last_glance_time > self.glance_cooldown):
+            glance_target = None
+            glance_type = None
+
+            if motion_centroid is not None and not self._is_in_cooldown(motion_centroid, now):
+                glance_target = motion_centroid
+                glance_type = "MOTION"
+            elif novel_object_center is not None:
+                glance_target = novel_object_center
+                glance_type = f"NEW {novel_object_label.upper()}"
+
+            if glance_target is not None:
+                self.in_motion_glance = True
+                self.glance_start_time = now
+                self.last_glance_time = now
+                self.target_gaze = list(glance_target)
+                self.active_target_type = "GLANCE"
+                self.glance_label = glance_type
+                self._add_cooldown_zone(glance_target, now)
+
+        # Handle active motion/orienting glance duration
+        if self.in_motion_glance:
+            if now - self.glance_start_time > self.glance_duration:
+                self.in_motion_glance = False
+                self.last_switch_time = 0
+
+        # Continuous Face Tracking: Dynamically move target point as face moves
+        if not self.in_motion_glance and self.active_target_type == "FACE" and real_face_centers:
+            closest_face = min(real_face_centers, key=lambda f: np.hypot(f[0] - self.target_gaze[0], f[1] - self.target_gaze[1]))
+            self.target_gaze = list(closest_face)
+
+        # Ambient Target Selection
+        if not self.in_motion_glance:
+            if now - self.last_switch_time > self.hold_duration:
+                self.last_switch_time = now
+                self.hold_duration = random.uniform(1.8, 3.5)
+
+                # Filter out candidates that fall inside active cooldown regions
+                valid_salient = [p for p in salient_points if not self._is_in_cooldown(p, now)]
+                valid_faces = [f for f in real_face_centers if not self._is_in_cooldown(f, now)]
+                valid_objects = [o for o in object_centers if not self._is_in_cooldown(o, now)]
+
+                # Selection Probability: 60% Face, 25% Object, 15% Salient Point
+                rand_val = random.random()
+                if valid_faces and rand_val < 0.60:
+                    chosen = random.choice(valid_faces)
+                    self.target_gaze = list(chosen)
+                    self.active_target_type = "FACE"
+                    self._add_cooldown_zone(chosen, now)
+                elif valid_objects and rand_val < 0.85:
+                    chosen = random.choice(valid_objects)
+                    self.target_gaze = list(chosen)
+                    self.active_target_type = "OBJECT"
+                    self._add_cooldown_zone(chosen, now)
+                elif valid_salient:
+                    chosen = random.choice(valid_salient)
+                    self.target_gaze = list(chosen)
+                    self.active_target_type = "SALIENT"
+                    self._add_cooldown_zone(chosen, now)
+                elif real_face_centers:
+                    # Fallback if all face regions are cooling down
+                    chosen = random.choice(real_face_centers)
+                    self.target_gaze = list(chosen)
+                    self.active_target_type = "FACE"
+                else:
+                    self.target_gaze = [self.frame_w // 2, self.frame_h // 2]
+                    self.active_target_type = "IDLE"
+
+        # Exponential smoothing
+        smooth_factor = 0.28 if self.in_motion_glance else 0.12
+        self.current_gaze[0] += (self.target_gaze[0] - self.current_gaze[0]) * smooth_factor
+        self.current_gaze[1] += (self.target_gaze[1] - self.current_gaze[1]) * smooth_factor
+
+        return int(self.current_gaze[0]), int(self.current_gaze[1])
+
+# -----------------------------------------------------------------------------
+# 5. Drawing Functions
+# -----------------------------------------------------------------------------
+def draw_phyzy_eyes(img, gaze_pt, is_glancing=False, eye_radius=48, pupil_radius=20):
+    if gaze_pt is None:
+        return
+
+    gx, gy = gaze_pt
+    spacing = eye_radius + 8
+
+    left_eye = (gx - spacing, gy)
+    right_eye = (gx + spacing, gy)
+    border_color = (0, 165, 255) if is_glancing else (0, 0, 0)
+
+    for eye_center in [left_eye, right_eye]:
+        cv2.circle(img, eye_center, eye_radius, (255, 255, 255), -1)
+        cv2.circle(img, eye_center, eye_radius, border_color, 3)
+        cv2.circle(img, eye_center, pupil_radius, (20, 20, 20), -1)
+        cv2.circle(img, (eye_center[0] - 4, eye_center[1] - 5), 4, (255, 255, 255), -1)
+
+# -----------------------------------------------------------------------------
+# 6. Load Known Face Database
+# -----------------------------------------------------------------------------
+KNOWN_FACES_DIR = "KnownFaces"
+known_db = {}
+
+if ENABLE_FACE_DETECTION and ENABLE_FACE_RECOGNITION and os.path.exists(KNOWN_FACES_DIR):
+    print(f"Loading reference embeddings from '{KNOWN_FACES_DIR}'...")
+    for filename in os.listdir(KNOWN_FACES_DIR):
+        if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+            name = os.path.splitext(filename)[0]
+            img_path = os.path.join(KNOWN_FACES_DIR, filename)
+            img = cv2.imread(img_path)
+            if img is None:
                 continue
 
-            #target = face_recognition.face_locations(target_image)
-            this_face_encodings = embedder.extract(target_image) #, threshold=0.90) # face_region  
-            if this_face_encodings:
-                this_face_encoding = this_face_encodings[0]['embedding']
-            # Use a regular expression to match the alphabetic part of the filename
-                match = re.match(r"([a-zA-Z]+)", file)      
-                if match:
-                    known_faces.append((match.group(1), this_face_encoding))
-                    #face_encodings.append(target_encoding)
-                else:
-                    assert False
-    return known_faces
+            faces = app.get(img)
+            if len(faces) > 0:
+                ref_face = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)[0]
+                known_db[name] = ref_face.embedding
+                print(f" Registered identity: '{name}'")
 
+RECOGNITION_THRESHOLD = 0.45
 
-
-
-
-def calculate_euclidean_distance(embedding1, embedding2):
-    """
-    Computes the Euclidean distance between two face embeddings.
-    """
-    return np.linalg.norm(embedding1 - embedding2)
-
-
-def check_for_face(target_encoding, threshold, known_faces):
-    for face_name, face_encoding in known_faces:
-        dist = calculate_euclidean_distance(target_encoding, face_encoding)
-        print("face_name, dist: ", face_name, dist)
-        if dist <= threshold:
-            return face_name
-    return ("")
-        
-def check_region_for_known_face(face_region, thresh, known_faces):
-    this_face_encodings = embedder.extract(face_region) #, threshold=thresh) # face_region
-    if this_face_encodings:
-        this_face_encoding = this_face_encodings[0]['embedding']
-        face_name = check_for_face(this_face_encoding, thresh, known_faces)
-        print(face_name)
-        #fn_ttl = FACE_NAME_TTL
-    else:
-        face_name = ""
-        #fn_ttl = 0
-    return face_name
-
-
-def calc_face_physical_dist(face_a_x, face_a_y, face_b_x, face_b_y):
-    return math.sqrt( math.pow( (face_a_x - face_b_x),2) + math.pow((face_a_y - face_b_y) ,2) )
-
-def calc_person_physical_dist(person1, person2):
-    return calc_face_physical_dist(person1.x_pos, person1.y_pos, person2.x_pos, person2.y_pos)
-
-
-def preprocess_face(image, target_size=(160, 160)):
-    """
-    Preprocess the face for FaceNet encoding.
-    Resize, normalize, and expand dimensions.
-    """
-    face = cv2.resize(image, target_size)
-    face = face.astype('float32') / 255.0  # Normalize pixel values
-    face = np.expand_dims(face, axis=0)    # Add batch dimension
-    return face
-
-
-# Ball (microphone) detection
-def detect_ball(frame):
-    items = ['apple', 'sports ball',] # 'person']  # FIXME: you can limit what YOLO actually looks for
-    results = model(frame, verbose=False)
-    #results = model.predict(frame, show=False, boxes=False, classes=False, conf=False)
-
-    for result in results:
-        boxes = result.boxes  # Each detection result has 'boxes', 'conf', and 'class' attributes
-        
-        for box in boxes:
-            x1, y1, x2, y2 = box.xyxy[0].int().tolist()  # Get coordinates
-            conf = box.conf[0].item()  # Confidence score
-            cls = box.cls[0].item()  # Class ID
-
-            this_item = model.names[int(cls)]
-            this_item_conf = conf
-
-            label = f"{model.names[int(cls)]} {conf:.2f}"
-            if DEBUG_YOLO or (this_item in items):
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                ball_x, ball_y = get_pos_from_box([x1,y1,x2,y2])
-                return( ball_x, ball_y )  
-            
-    else:
-        return(None, None)
-
-
-def detect_faces(frame, max_faces = 5, PROB_THRESH = 0.90):
-    face_list = []
-    result = mtcnn.detect_faces(frame)
-    
-
-    face_count = 0
-    for found_face in result:
-        if not DEBUG_MTCNN and (face_count >= max_faces):
-            break
-        box = found_face['box'] # The 'box' key contains a list or tuple of [x, y, width, height]
-        keypoints = found_face['keypoints']
-        confidence = found_face['confidence']
-        if confidence > PROB_THRESH:
-            try:
-                # Set up region to look for known faces
-                face_region = frame[ box[1]:(box[1]+box[3]), int(box[0]):int(box[0]+box[2]) ]
-                
-                # Equalize the Y channel
-                #ycrcb = cv2.cvtColor(face_region, cv2.COLOR_RGB2YCrCb)
-                #ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0]) # FIXME: Still useful???
-                #face_region = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
-
-                cv2.imshow('face_region', face_region) 
-                cv2.moveWindow("face_region", 40,30)
-
-                box_cv2 = [box[0], box[1], box[0]+box[2], box[1]+box[3] ] # This is a CV2 box, not MTCNN box
-                pos_x, pos_y = get_pos_from_box(box_cv2)
-                face_list.append(Person(pos_x, pos_y, face_region, ""))    
-                face_count += 1            
-            except:
-                pass
-
-    return face_list
-                
-
-
-
-############
-### MAIN ###
-############
-
-
-print("*** Starting ***")
+# -----------------------------------------------------------------------------
+# 7. Initialize Pygame & Threaded Camera Feed
+# -----------------------------------------------------------------------------
 pygame.init()
+pygame.display.set_caption("PhyzAI Remote Control - Saliency & Vision")
 
+camera = ThreadedCamera(0)
 
-# Create face detector    
-if enable_face_detect:
-    mtcnn = MTCNN() # device="CPU:0"
+# Allow camera driver a moment to initialize frame dimensions
+time.sleep(0.5)
+success, init_frame = camera.read()
 
-if enable_face_recog:
-    known_faces = generate_encodings_from_dir("./KnownFaces/")
+frame_width = init_frame.shape[1] if success and init_frame is not None else 1280
+frame_height = init_frame.shape[0] if success and init_frame is not None else 720
 
-
-# Video Capture and display (only 1st 2 backends work on Win11?)
-if HOME:
-    cap = cv2.VideoCapture(0)  #FIXME: Home camera needs this, PhyzAI camera needs below.  Why???
-else:
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   # CAP_MSMF, CAP_DSHOW, _FFMPEG, _GSTREAMER
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-ret, frame = cap.read()
-image_size_x = frame.shape[1]
-image_size_y = frame.shape[0]
-
+screen = pygame.display.set_mode((frame_width, frame_height))
 clock = pygame.time.Clock()
 
+motion_detector = MotionDetector(min_area=2000, threshold=25)
+object_detector = ObjectDetector(mode=OBJECT_DETECTOR_MODE, conf_thresh=OBJ_CONF_THRESHOLD)
+gaze_controller = GazeController(frame_width, frame_height)
 
-# Initialize on-screen Phyz 
-pos_x = image_size_x//2
-pos_y = image_size_y//2
-head_angle = 0
-left_arm = 0         
-right_arm = 0
+# Initialize physical motor position
+set_head_to_nominal()
 
+print(f"\nVision loop active at {frame_width}x{frame_height}. Press ESC to exit.")
 
-# Set head servos to nominal
-if enable_MC: set_head_to_nominal()
+# -----------------------------------------------------------------------------
+# 8. Main Processing Loop
+# -----------------------------------------------------------------------------
+running = True
+prev_frame_time = time.time()
+frame_count = 0
+cached_face_centers = []
+cached_face_draw_data = []
+cached_object_detections = []
 
-
-# Initialize stuff
-person_num = 0
-people_list = []
-time_to_live = 0   # Time that detected faces stay in case of nothing new detected
-head_duration_count = 0
+# Pose animation counters for motor control
 body_duration_count = 0
-person_offset_x = 0
-person_offset_y = 0
+head_angle = 0
+arm_left_axis = 0.0
+arm_right_axis = 0.0
 
-assert num_people > 0
-random_people_list = choose_people_locations(num_people, enable_face_camera) 
-people_list = random_people_list.copy()  # Initially, all people are random
-new_people_list = []
+try:
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                running = False
 
+        success, frame = camera.read()
+        if not success or frame is None:
+            time.sleep(0.01)
+            continue
 
-#################
-### Main Loop ###
-#################
+        display_frame = frame.copy()
+        now = time.time()
 
-while True:
+        # --- A. Calculate FPS ---
+        delta_time = now - prev_frame_time
+        prev_frame_time = now
+        fps = 1.0 / delta_time if delta_time > 0 else 0.0
 
-    clock.tick(20)  # Frame Rate = 20 fps
+        # --- B. Motion Detection ---
+        motion_boxes, motion_centroid = motion_detector.process(frame)
+        for (mx, my, mw, mh) in motion_boxes:
+            cv2.rectangle(display_frame, (mx, my), (mx + mw, my + mh), (255, 255, 0), 1)
 
-    # Read the frame from the webcam
-    ret, frame = cap.read()
-    if not ret:
-        continue
-    frame = cv2.flip(frame, 1)
-    
-    if enable_face_detect:
-        new_people_list = detect_faces(frame, num_people)
+        # --- C. Saliency Extraction ---
+        salient_points = extract_salient_points(frame, num_points=NUM_SALIENCY_POINTS)
+        for sx, sy in salient_points:
+            cv2.circle(display_frame, (sx, sy), 8, (255, 0, 255), 1)
+            cv2.putText(display_frame, "Salient Point", (sx - 35, sy + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
 
-    if enable_ball_detect: # Ball / microphone detect
-        ball_loc_x, ball_loc_y = detect_ball(frame)
-        if ball_loc_x is not None:
-            new_people_list.insert(0,Person(ball_loc_x, ball_loc_y, name="mic"))
+        # --- C2. Object Detection (Cached every N frames) ---
+        if ENABLE_OBJECT_DETECTION:
+            if frame_count % OBJ_DET_INTERVAL == 0:
+                cached_object_detections = object_detector.detect(frame)
 
-    # Check for real people that have moved only a little bit, update their location
-    for i in range(len(new_people_list)):  # new_people_list is always the same or smaller than people_list
-        for j in range(len(new_people_list)):
-            new_face_dist = calc_person_physical_dist(people_list[i], new_people_list[j])
-            if new_face_dist < SAME_FACE_DIST:  # If the face only moved a bit, update the location
-                people_list[i].x_pos = new_people_list[j].x_pos
-                people_list[i].y_pos = new_people_list[j].y_pos
-                # new_people_list.pop(j) # FIXME: Maybe???
-                break
+        object_centers = []
+        for obj in cached_object_detections:
+            ox, oy, ow, oh = obj['box']
+            label = f"{obj['label']} ({obj['score']:.2f})"
+            cx, cy = obj['center']
+            object_centers.append((cx, cy))
 
-    # Decrement time-to-live for each person, choose new person (real or not) if timed-out
-    for i in range(len(people_list)):
-        if people_list[i].time_to_live > 0: 
-            people_list[i].time_to_live = people_list[i].time_to_live - 1
-        elif i < len(new_people_list):
-            people_list[i] = new_people_list[i]
-            people_list[i].time_to_live = FACE_DET_TTL
+            # Draw cyan bounding boxes and labels for detected objects
+            cv2.rectangle(display_frame, (ox, oy), (ox + ow, oy + oh), (255, 255, 0), 2)
+            cv2.putText(display_frame, label, (ox, max(oy - 5, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+
+        # Draw Object Detection Engine Status in Top-Left HUD
+        obj_status_text = f"OBJ Engine: {object_detector.status_msg}"
+        cv2.putText(display_frame, obj_status_text, (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+
+        # --- D. Face Detection & Recognition (Cached every N frames) ---
+        if ENABLE_FACE_DETECTION:
+            if frame_count % FACE_DET_INTERVAL == 0:
+                faces = app.get(frame)
+                cached_face_centers = []
+                cached_face_draw_data = []
+
+                for face in faces:
+                    bbox = face.bbox.astype(int)
+                    x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
+                    center_x = (x1 + x2) // 2
+                    center_y = (y1 + y2) // 2
+                    cached_face_centers.append((center_x, center_y))
+
+                    label = "Face"
+                    color = (0, 255, 0)
+
+                    # Identity matching only runs if recognition switch is active
+                    if ENABLE_FACE_RECOGNITION and known_db and face.embedding is not None:
+                        best_score = -1.0
+                        best_name = None
+                        for name, ref_emb in known_db.items():
+                            score = cosine_similarity(face.embedding, ref_emb)
+                            if score > best_score:
+                                best_score = score
+                                best_name = name
+
+                        if best_score >= RECOGNITION_THRESHOLD:
+                            label = f"{best_name} ({best_score:.2f})"
+                            color = (0, 255, 0)
+                        else:
+                            label = f"Unknown ({best_score:.2f})"
+                            color = (0, 165, 255)
+
+                    cached_face_draw_data.append((x1, y1, x2, y2, label, color))
         else:
-            people_list[i] = choose_person_location(i, enable_face_camera)  # Choose a new random person
+            cached_face_centers = []
+            cached_face_draw_data = []
 
+        # Render face boxes/labels using cached data on every frame
+        real_face_centers = cached_face_centers
+        for x1, y1, x2, y2, label, color in cached_face_draw_data:
+            cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(display_frame, label, (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-    # Recognize known faces
-    if enable_face_recog:
-        for person in people_list:
-            if ((person.name == "") or (person.name == "<real>")) and (len(person.face_region) > 0):
-                face_name = check_region_for_known_face(person.face_region, 0.9, known_faces)
-                if len(face_name) > 0:
-                    person.name = face_name
+        frame_count += 1
 
+        # --- E. Update Gaze Position ---
+        gaze_x, gaze_y = gaze_controller.update(real_face_centers, motion_centroid, salient_points, cached_object_detections)
 
-    # Draw all the people
-    for person in people_list:
-        this_x, this_y = get_screen_position((person.x_pos, person.y_pos))
-        draw_person_loc(frame, this_x, this_y, person.name)
+        # --- E2. Move Physical Servos (if ENABLE_MC is True) ---
+        if ENABLE_MC:
+            # Convert frame pixel coordinate (0 to frame_width, 0 to frame_height)
+            # into normalized dimensionless space (-100 to +100)
+            norm_gaze_x = (gaze_x / float(frame_width)) * 200.0 - 100.0
+            norm_gaze_y = (gaze_y / float(frame_height)) * 200.0 - 100.0
 
-    # Look at one person, or switch
-    if head_duration_count <= 0:
-        event_prob = np.random.randint(0,100)
-        if event_prob < likelihood_of_first_face:   # Look at the main (same) person
-            person_num = 0
-            person_offset_x = 0
-            person_offset_y = 0
-            head_duration_count = abs(int(np.random.normal(2,10)))+5  # num of frames to keep looking at this person
-            phyz_note = ""
-        else:   # Switch person
-            new_person_num = person_num
-            while new_person_num == person_num:
-                new_person_num = np.random.randint(0,len(people_list))
-            print ("Switching person: ", person_num, new_person_num)
-            person_num = new_person_num
-            person_offset_x = 0
-            person_offset_y = 0
-            head_duration_count = abs(int(np.random.normal(2,10)))+5  # num of frames to keep looking at this person
-            phyz_note = ""
-    else:
-        head_duration_count -= 1
+            # Periodically generate subtle body pose movements (head tilt & arm posture)
+            if body_duration_count <= 0:
+                head_angle = int(np.random.normal(0, 10))
+                if random.randint(0, 100) < 5:  # Hands up gesture
+                    arm_left_axis = 0.0
+                    arm_right_axis = 1.0
+                else:
+                    arm_left_axis = abs(np.random.normal(0.4, 0.3))
+                    arm_right_axis = abs(np.random.normal(0.1, 0.3))
+                body_duration_count = int(np.random.normal(2, 6))
+            else:
+                body_duration_count -= 1
 
+            move_physical_position((norm_gaze_x, norm_gaze_y), head_angle, arm_left_axis, arm_right_axis)
 
-    ### Tilt Head, move arms ###
+        # --- F. Draw Active Cooldown Circles & Overlay Eyes ---
+        gaze_controller.draw_debug_cooldowns(display_frame, now)
+        draw_phyzy_eyes(display_frame, (gaze_x, gaze_y), is_glancing=gaze_controller.in_motion_glance)
 
-    if body_duration_count <= 0:  # Time for a new position
-        head_angle = int(np.random.normal(0, 10))
-        if np.random.randint(0,100) < 5: # hands up
-            arm_left_axis = 0
-            arm_right_axis = 1
-        else:
-            arm_left_axis = abs((np.random.normal(0.4, 0.3)))
-            arm_right_axis = abs((np.random.normal(0.1, 0.3)))
-        body_duration_count = int(np.random.normal(2,6))  # num of frames to keep same position
-    else:
-        body_duration_count -= 1
-    
+        if gaze_controller.in_motion_glance:
+            glance_text = f"[GLANCE: {gaze_controller.glance_label}]"
+            cv2.putText(display_frame, glance_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
-    # Draw and move where Phyz is looking
+        # --- G. Render FPS Overlay (Top-Right Corner) ---
+        fps_text = f"FPS: {int(fps)}"
+        cv2.putText(display_frame, fps_text, (frame_width - 130, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-    person_x = people_list[person_num].x_pos + person_offset_x
-    person_y = people_list[person_num].y_pos + person_offset_y
-    pos_x, pos_y = get_screen_position((person_x, person_y))
-    if enable_GUI:
-        if enable_show_phyz_loc: draw_phyz_position(frame, pos_x, pos_y, head_angle, arm_left_axis, arm_right_axis, phyz_note)
-        cv2.imshow('image', frame) 
-    if enable_MC:
-        move_physical_position((person_x, person_y), head_angle, arm_left_axis, arm_right_axis)
+        # --- H. Render Screen ---
+        rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+        surface_data = np.rot90(rgb_frame)
+        surface_data = np.flipud(surface_data)
+        surface = pygame.surfarray.make_surface(surface_data)
 
+        screen.blit(surface, (0, 0))
+        pygame.display.flip()
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+        clock.tick(30)
 
-    events = pygame.event.get()
-    
-
-# Release the video capture and close the window
-cap.release()
-cv2.destroyAllWindows()
-exit()
+finally:
+    camera.release()
+    pygame.quit()
+    sys.exit(0)
