@@ -2,6 +2,9 @@
 # with simplified libraries, object detection, and saliency
 # Oct 2026: updated version by TheRFengineer@gmail.com
 
+#TODO: Make faces more of a priority
+#TODO: adjustable priority for face detection, face recognition, object detection, and saliency
+#TODO: Bigger camera frame (100%)?
 import os
 import sys
 import time
@@ -12,6 +15,7 @@ import numpy as np
 import cv2  # pip install opencv-contrib-python-headless
 import pygame
 from insightface.app import FaceAnalysis
+#pip3 install pyserial # not serial !!!
 
 # Prevent Cocoa/Objective-C fork warnings on macOS
 os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
@@ -42,7 +46,7 @@ OBJ_DET_INTERVAL = 3            # Run object detection every N frames (caching r
 OBJ_CONF_THRESHOLD = 0.40       # Confidence score threshold for valid object detections
 
 # Motor Control Settings (Maestro Servo Controller)
-ENABLE_MC = False               # Set to True to enable Pololu Maestro physical servo movement
+ENABLE_MC = True            # Set to True to enable Pololu Maestro physical servo movement
 HOME_LOCATION = False           # Set to True for COM3 (home), False for COM5 (Phyz)
 HEAD_OFFSET_X = 0               # Calibration offset X
 HEAD_OFFSET_Y = 0               # Calibration offset Y
@@ -133,6 +137,8 @@ class ThreadedCamera:
     """
     def __init__(self, src=0):
         self.cap = cv2.VideoCapture(src)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) #RKD
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) #RKD
         if not self.cap.isOpened():
             sys.exit("Error: Could not open video device.")
 
@@ -721,7 +727,7 @@ class GazeController:
 
                 # Selection Probability: 60% Face, 25% Object, 15% Salient Point
                 rand_val = random.random()
-                if valid_faces and rand_val < 0.60:
+                if valid_faces and rand_val < 0.80:  #RKD
                     chosen = random.choice(valid_faces)
                     self.target_gaze = list(chosen)
                     self.active_target_type = "FACE"
@@ -811,6 +817,9 @@ success, init_frame = camera.read()
 frame_width = init_frame.shape[1] if success and init_frame is not None else 1280
 frame_height = init_frame.shape[0] if success and init_frame is not None else 720
 
+#init_frame = pygame.transform.flip(init_frame, True, False) # Horizontal flip
+init_frame = np.fliplr(init_frame)
+
 screen = pygame.display.set_mode((frame_width, frame_height))
 clock = pygame.time.Clock()
 
@@ -849,6 +858,10 @@ try:
         if not success or frame is None:
             time.sleep(0.01)
             continue
+
+        #frame = pygame.transform.flip(frame, True, False) # Horizontal flip
+        frame = np.fliplr(frame)
+
 
         display_frame = frame.copy()
         now = time.time()
