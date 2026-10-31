@@ -6,7 +6,7 @@ import time
 import os
 
 image_path = "./Images/"
-base_name = "LeAnn"
+base_name = "Bahadir"
 
 if not os.path.exists(image_path):
     os.mkdir(image_path)

@@ -848,8 +848,16 @@ head_angle = 0
 arm_left_axis = 0.0
 arm_right_axis = 0.0
 
+
+#clock = pygame.time.Clock()
+
+
 try:
     while running:
+
+        #clock.tick(15)  # Frame Rate = 20 fps
+
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 running = False
