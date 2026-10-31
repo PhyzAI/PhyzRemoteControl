@@ -137,8 +137,8 @@ class ThreadedCamera:
     """
     def __init__(self, src=0):
         self.cap = cv2.VideoCapture(src)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) #RKD
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) #RKD
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280*0.5) #RKD
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720*0.5) #RKD
         if not self.cap.isOpened():
             sys.exit("Error: Could not open video device.")
 
